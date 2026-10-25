@@ -15,3 +15,14 @@ mcp = FastMCP (
     name = "Yojak",
     auth = workos_auth,
 )
+
+# Tool 1 - Diagnostic Tool
+@mcp.tool
+def yojak_status() -> dict:
+    # Dcstring describes the tool to the client
+    """Return the current status of the Yojak Application """ 
+
+    return {
+        "application" : "Yojak",
+        "status" : "OK",
+    }

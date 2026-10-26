@@ -3,7 +3,7 @@ import pytest
 
 from app.database import lifespan_database
 from app.repositories import (
-    consme_oauth_state,
+    consume_oauth_state,
     create_oauth_state
 )
 
@@ -31,14 +31,14 @@ async def test_oauth_state_can_be_consumed_only_once():
                     tenant_id,
                 )
 
-            consumed_tenant_id = await consme_oauth_state(
+            consumed_tenant_id = await consume_oauth_state(
                     pool,
                     state,
                 )
 
             assert consumed_tenant_id == tenant_id
 
-            second_attempt = await consme_oauth_state(
+            second_attempt = await consume_oauth_state(
                     pool,
                     state,
                 )

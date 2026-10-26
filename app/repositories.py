@@ -14,12 +14,14 @@ def hash_oauth_state(state: str) -> str:
 
 
 # 1. Creating Tenant 
-async def create_tenant(pool: asyncpg.Pool, name: str,) -> dict[str, Any]:
+async def get_or_create_tenant(pool: asyncpg.Pool, name: str,) -> dict[str, Any]:
     
     query = """
-        INSERT INTO tenants (name)
-        VALUES ($1)
-        RETURNING id, name, created_at;
+        INSERT INTO tenants (workos_user_id, name)
+        VALUES ($1, 'tenant ' || LEFT(REPLACE(gen_random_uuid()::TEXT,'-',''),8))
+        ON CONFLICT (workos_user_id)
+        DO UPDATE SET workos_user_id = EXCLUDED.workos_user_id
+        RETURNING id, workos_user_id, name, created_at;
     """
 
     async with pool.acquire() as connection:
@@ -147,7 +149,7 @@ async def create_oauth_state(
 
 
 # 6. Validate & Consume an Unexpired OAuth State exactly Once
-async def consme_oauth_state(
+async def consume_oauth_state(
     pool: asyncpg.Pool,
     state: str,
     ) -> UUID | None:

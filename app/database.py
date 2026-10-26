@@ -21,10 +21,6 @@ async def lifespan_database() -> AsyncIterator[asyncpg.Pool]:
         await pool.close()
 
 
-
-
-
-
 # Database Connecion Check Funtion 
 async def check_database_connection() -> bool:
     connection = await asyncpg.connect(

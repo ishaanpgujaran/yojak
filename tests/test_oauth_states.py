@@ -4,7 +4,8 @@ import pytest
 from app.database import lifespan_database
 from app.repositories import (
     consume_oauth_state,
-    create_oauth_state
+    create_oauth_state,
+    get_or_create_tenant,
 )
 
 @pytest.mark.anyio
@@ -13,16 +14,12 @@ async def test_oauth_state_can_be_consumed_only_once():
         tenant_id: UUID | None = None
 
         try:
-            async with pool.acquire() as connection:
-                tenant_id = await connection.fetchval(
-                    """
-                        INSERT INTO tenants (name)
-                        VALUES ($1)
-                        RETURNING id;
-                    """,
-                    "OAuth State Test Tenant",
-                )
+            # Create a tenant with a vaid WorkOS user ID
+            tenant = await get_or_create_tenant(pool, "test-workos-user-oauth-state-001")
 
+            tenant_id = tenant["id"]
+
+            # Create an OAuth state
             state = "test-oauth-state-unique-001"
 
             await create_oauth_state(
@@ -31,6 +28,7 @@ async def test_oauth_state_can_be_consumed_only_once():
                     tenant_id,
                 )
 
+            # First Consumption should succeed
             consumed_tenant_id = await consume_oauth_state(
                     pool,
                     state,
@@ -38,6 +36,7 @@ async def test_oauth_state_can_be_consumed_only_once():
 
             assert consumed_tenant_id == tenant_id
 
+            # Second Consumption should fail
             second_attempt = await consume_oauth_state(
                     pool,
                     state,

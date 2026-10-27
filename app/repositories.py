@@ -14,18 +14,18 @@ def hash_oauth_state(state: str) -> str:
 
 
 # 1. Creating Tenant 
-async def get_or_create_tenant(pool: asyncpg.Pool, name: str,) -> dict[str, Any]:
+async def get_or_create_tenant(pool: asyncpg.Pool, workos_user_id: str,) -> dict[str, Any]:
     
     query = """
         INSERT INTO tenants (workos_user_id, name)
-        VALUES ($1, 'tenant ' || LEFT(REPLACE(gen_random_uuid()::TEXT,'-',''),8))
+        VALUES ($1, 'Tenant ' || LEFT(REPLACE(gen_random_uuid()::TEXT,'-',''),8))
         ON CONFLICT (workos_user_id)
         DO UPDATE SET workos_user_id = EXCLUDED.workos_user_id
         RETURNING id, workos_user_id, name, created_at;
     """
 
     async with pool.acquire() as connection:
-        row = await connection.fetchrow(query, name)
+        row = await connection.fetchrow(query, workos_user_id)
     
     return dict(row)
 

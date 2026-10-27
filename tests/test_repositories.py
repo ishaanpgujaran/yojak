@@ -26,8 +26,8 @@ async def test_tenant_and_merchant_connection_operations():
             tenant_id = tenant["id"]
             
             assert tenant["workos_user_id"] == workos_user_id
-            assert tenant["name"].startswith("tenant ")
-            assert len(tenant["name"]) == len("tenant ") + 8
+            assert tenant["name"].startswith("Tenant ")
+            assert len(tenant["name"]) == len("Tenant ") + 8
             assert isinstance(tenant_id, UUID)
 
 
@@ -98,7 +98,7 @@ async def test_tenant_and_merchant_connection_operations():
                     await connection.execute(
                         """
                         DELETE FROM tenants 
-                        WHERE id = $1
+                        WHERE id = $1;
                         """,
                         other_tenant_id,
                     )

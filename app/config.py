@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # WorkOS AuthKit Configuration
     workos_authkit_domain: str
 
+    # Zoho Token Encryption Key
+    zoho_token_encryption_key: str
+
 
     model_config = SettingsConfigDict(
         env_file = ".env",

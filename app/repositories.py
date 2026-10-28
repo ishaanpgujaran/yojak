@@ -166,3 +166,30 @@ async def consume_oauth_state(
         row = await connection.fetchrow(query, state_hash)
 
     return row["tenant_id"] if row else None
+
+
+# 7. Get Encrypted Refresh token for a Merchant connection
+async def get_encrypted_refresh_token(
+        pool: asyncpg.Pool,
+        tenant_id: UUID,
+        connection_id: UUID,
+    ) -> bytes | None:
+    
+    query = """
+        SELECT refresh_token_encrypted
+        FROM merchant_connections
+        WHERE tenant_id = $1 AND id = $2;
+    """
+
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(
+            query,
+            tenant_id,
+            connection_id,
+        )
+    
+    if row is None:
+        return None
+
+    return row["refresh_token_encrypted"]
+

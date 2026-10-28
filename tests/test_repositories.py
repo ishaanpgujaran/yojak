@@ -7,6 +7,7 @@ from app.repositories import (
     get_or_create_tenant,
     get_merchant_connection,
     get_tenant,
+    get_encrypted_refresh_token,
 )
 
 import asyncio
@@ -82,6 +83,53 @@ async def test_tenant_and_merchant_connection_operations():
             unauthorized_lookup = await get_merchant_connection(pool, other_tenant_id, connection_id,)
 
             assert unauthorized_lookup is None
+
+
+            # 8. Store a test encrypted refresh token
+            test_encrypted_token = b"test-encrypted-refresh-token"
+
+            async with pool.acquire() as connection:
+                await connection.execute(
+                    """
+                    UPDATE merchant_connections
+                    SET refresh_token_encrypted = $1
+                    WHERE tenant_id = $2 AND id = $3;
+                    """,
+                    test_encrypted_token,
+                    tenant_id,
+                    connection_id,
+                )
+            
+
+            # 9. Retrieve the encrypted refresh token
+            retrieved_token = await get_encrypted_refresh_token(
+                pool, 
+                tenant_id,
+                connection_id,
+            )
+
+            assert retrieved_token == test_encrypted_token
+            assert isinstance(retrieved_token, bytes)
+
+
+            # 10. Another tenant must not retrieve the token
+            unauthorized_token = await get_encrypted_refresh_token(
+                pool,
+                other_tenant_id,
+                connection_id,
+            )
+
+            assert unauthorized_token is None
+
+
+            # 11. An unknown connection must return None
+            unknown_connection_token = await get_encrypted_refresh_token(
+                pool,
+                tenant_id,
+                UUID("00000000-0000-0000-0000-000000000001"),
+            )
+
+            assert unknown_connection_token is None
         
         finally:
             # Clean up test records

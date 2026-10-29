@@ -12,6 +12,8 @@ from app.repositories import (
 
 import asyncio
 
+from zoho.crypto import encrypt_refresh_token
+
 
 @pytest.mark.anyio
 async def test_tenant_and_merchant_connection_operations():
@@ -54,14 +56,20 @@ async def test_tenant_and_merchant_connection_operations():
             assert other_tenant["workos_user_id"] == "test_workos_user_002"
     
 
-            # 5. Create a Zoho Inventory Connection
+            # 5. Create a Zoho Inventory Merchant Connection
+            test_refresh_token = "test-refresh-token"
+
+            encrypted_refresh_token = encrypt_refresh_token(test_refresh_token)
+
             merchant_connection = await create_merchant_connection(
                 pool,
                 tenant_id,
                 "test-org-001",
+                encrypted_refresh_token,
                 [
                     "ZohoInventory.items.READ",
                     "ZohoInventory.salesorders.READ",
+                    "ZohoInventory.settings.READ",
                 ],
             )
 
@@ -69,7 +77,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert merchant_connection["tenant_id"] == tenant_id
             assert merchant_connection["provider"] == "zoho_inventory"
-            assert merchant_connection["status"] == "pending"
+            assert merchant_connection["status"] == "active"
 
 
             # 6. Retrieve Connection using its tenant & connection IDs.
@@ -77,6 +85,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert retrieved_connection is not None
             assert retrieved_connection["id"] == connection_id
+            assert "refresh_token_encrypted" not in retrieved_connection
 
 
             # 7. A different tenatn ID must not retrieve this connection

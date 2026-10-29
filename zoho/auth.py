@@ -3,11 +3,12 @@ from urllib.parse import urlencode
 
 from app.config import settings
 
-ZOHO_AUTH_URL = f"{settings.zoho_accounts_url}/oauth/v2/auth"
+ZOHO_AUTH_URL = (f"{settings.zoho_accounts_url.rstrip('/')}/oauth/v2/auth")
 
 ZOHO_SCOPES = (
     "ZohoInventory.items.READ,"
-    "ZohoInventory.salesorders.READ"
+    "ZohoInventory.salesorders.READ,"
+    "ZohoInventory.settings.READ"
 )
 
 

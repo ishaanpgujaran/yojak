@@ -12,12 +12,19 @@ from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_access_token
 from app.repositories import get_or_create_tenant
 
+from  app import runtime
+
 
 # Configure database pool lifecycle
 @asynccontextmanager
 async def mcp_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     async with lifespan_database() as pool:
-        yield {"pool": pool}
+        runtime.database_pool = pool
+
+        try:
+            yield {"pool": pool}
+        finally:
+            runtime.database_pool = None
 
 
 # Configure WorkOS AuthKit Authentication

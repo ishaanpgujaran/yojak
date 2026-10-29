@@ -5,7 +5,6 @@ class Settings(BaseSettings):
     zoho_client_id: str
     zoho_client_secret: str
     zoho_redirect_uri: str
-    zoho_organization_id: str
     zoho_accounts_url: str
     zoho_api_base_url: str
     

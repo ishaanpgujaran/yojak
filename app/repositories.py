@@ -50,6 +50,7 @@ async def create_merchant_connection(
     pool: asyncpg.Pool,
     tenant_id: UUID,
     zoho_organization_id: str, 
+    refresh_token_encrypted: bytes,
     granted_scopes: list[str],
     ) -> dict[str, Any]:
     
@@ -58,9 +59,11 @@ async def create_merchant_connection(
             tenant_id,
             provider,
             zoho_organization_id,
-            granted_scopes
+            refresh_token_encrypted,
+            granted_scopes,
+            status
         )
-        Values ($1, 'zoho_inventory', $2, $3)
+        Values ($1, 'zoho_inventory', $2, $3, $4, 'active')
         RETURNING
             id,
             tenant_id,
@@ -77,6 +80,7 @@ async def create_merchant_connection(
             query,
             tenant_id,
             zoho_organization_id,
+            refresh_token_encrypted,
             granted_scopes,
         )
     

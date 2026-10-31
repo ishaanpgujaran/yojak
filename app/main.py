@@ -1,12 +1,21 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 
 from fastmcp.utilities.lifespan import combine_lifespans
 from yojak_mcp.server import mcp, workos_auth
 
 from app import runtime
-from app.repositories import get_or_create_tenant, create_oauth_state
+from app.repositories import (
+    get_or_create_tenant, 
+    create_oauth_state,
+    consume_oauth_state,
+    create_zoho_authorization,
+    create_merchant_connection,
+)
 from zoho.auth import generate_oauth_state, build_authorization_url
+
+from zoho.client import exchange_authorization_code
+from zoho.crypto import encrypt_refresh_token
 
 
 # MCP Server HTTP Application
@@ -104,6 +113,129 @@ async def connect_zoho(request: Request):
     return RedirectResponse(
         url = authorization_url,
         status_code = 302,
+    )
+
+
+# Zoho OAuth Callback Endpoint
+@app.get("/oauth/zoho/callback")
+async def zoho_callback(
+        request: Request,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+    ):
+
+    # 1. Handle authorization denial or other OAuth errors
+    if error:
+        raise HTTPException(
+            status_code = 400,
+            detail = "Zoho authorization was denied or failed.",
+        )
+    
+
+    # 2. Validate the required callback parameters
+    if not code or not code.strip():
+        raise HTTPException(
+            status_code = 400,
+            detail = "Authorization code is missing.",
+        )
+    
+    if not state or not state.strip():
+        raise HTTPException(
+            status_code = 400,
+            detail = "OAuth state is missing.",
+        )
+    
+
+    # 3. Obtain the existing database pool
+    pool = runtime.database_pool
+
+    if pool is None:
+        raise HTTPException(
+            status_code = 503,
+            detail = "Database connection is unavailable.",
+        )
+    
+
+    # 4. Validate and Consume OAuth state
+    try:
+        tenant_id = await consume_oauth_state(pool, state)
+    except Exception:
+        raise HTTPException(
+            status_code = 500,
+            detail = "Unable to validate OAuth state.",
+        )
+    
+    if tenant_id is None:
+        raise HTTPException(
+            status_code = 400,
+            detail = "OAuth state is invalid, expired, or already used.",
+        )
+    
+
+    # 5. Exchange authorization code for tokens
+    try: 
+        token_data = await exchange_authorization_code(code)
+    except Exception:
+        raise HTTPException(
+            status_code = 502,
+            detail = "Unable to exchange the Zoho authorization code.",
+        )
+    
+
+    # 6. Encrypt the refresh token
+    try:
+        encrypted_refresh_token = encrypt_refresh_token(token_data["refresh_token"])
+    except Exception:
+        raise HTTPException(
+            status_code = 500,
+            detail = "Unable to securely store the Zoho authorization",
+        )
+    
+
+    # 7. Parse granted scopes
+    scopes_value = token_data.get("scope", "")
+
+    if isinstance(scopes_value, str):
+        granted_scopes = [
+            scope.strip() for scope in scopes_value.split(",") if scope.strip()
+        ]
+    elif isinstance(scopes_value, list):
+        granted_scopes = scopes_value
+    else:
+        raise HTTPException(
+            status_code = 502,
+            detail = "Zoho returned an invalid scope format.",
+        )
+    
+
+    # 8. Persist the authorization
+    try:
+        authorization = await create_zoho_authorization(
+            pool = pool,
+            tenant_id = tenant_id,
+            refresh_token_encrypted = encrypted_refresh_token,
+            granted_scopes = granted_scopes,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code = 500,
+            detail = "Unable to save the Zoho Authorization.",
+        )
+    
+
+    # 9. Return a safe success response
+    return JSONResponse(
+        status_code = 200,
+        content = {
+            "status": "connected",
+            "provider": "zoho_inventory",
+            "message": (
+                "Zoho authorization was stored successfully."
+                "Organization discover is the next step"
+            ),
+            "authorization_id": str(authorization["id"]),
+        },
     )
 
 

@@ -280,7 +280,7 @@ async def get_zoho_refresh_token_for_connection(
     return row["refresh_token_encrypted"] if row else None
 
 
-# 5. Store Hashed OAuth State with Limited Lifetime
+# 9. Store Hashed OAuth State with Limited Lifetime
 async def create_oauth_state(
     pool: asyncpg.Pool,
     state: str,
@@ -313,7 +313,7 @@ async def create_oauth_state(
         )
 
 
-# 6. Validate & Consume an Unexpired OAuth State exactly Once
+# 10. Validate & Consume an Unexpired OAuth State exactly Once
 async def consume_oauth_state(
     pool: asyncpg.Pool,
     state: str,
@@ -331,6 +331,37 @@ async def consume_oauth_state(
         row = await connection.fetchrow(query, state_hash)
 
     return row["tenant_id"] if row else None
+
+
+# 11. Set the Active Zoho Organization Connection for a tenant
+async def set_active_organization_connection(
+        pool: asyncpg.Pool,
+        tenant_id: UUID,
+        connection_id: UUID,
+    ) -> bool:
+
+    query = """
+        UPDATE tenants AS t
+        SET active_organization_connection_id = mc.id
+        FROM merchant_connections AS mc
+        JOIN zoho_authorizations AS za
+        ON za.id = mc.authorization_id AND za.tenant_id = mc.tenant_id
+        WHERE t.id = $1
+            AND mc.id = $2
+            AND mc.tenant_id = t.id
+            AND mc.status = 'active'
+            AND za.status = 'active'
+        RETURNING t.id;
+    """
+
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(
+            query,
+            tenant_id,
+            connection_id,
+        )
+    
+    return row is not None
 
 
 

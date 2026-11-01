@@ -124,16 +124,9 @@ async def zoho_callback(
         state: str | None = None,
         error: str | None = None,
     ):
-
-    # 1. Handle authorization denial or other OAuth errors
-    if error:
-        raise HTTPException(
-            status_code = 400,
-            detail = "Zoho authorization was denied or failed.",
-        )
     
 
-    # 2. Validate the required callback parameters
+    # 1. Validate the required callback parameters
     if not code or not code.strip():
         raise HTTPException(
             status_code = 400,
@@ -147,7 +140,7 @@ async def zoho_callback(
         )
     
 
-    # 3. Obtain the existing database pool
+    # 2. Obtain the existing database pool
     pool = runtime.database_pool
 
     if pool is None:
@@ -157,7 +150,7 @@ async def zoho_callback(
         )
     
 
-    # 4. Validate and Consume OAuth state
+    # 3. Validate and Consume OAuth state
     try:
         tenant_id = await consume_oauth_state(pool, state)
     except Exception:
@@ -172,6 +165,14 @@ async def zoho_callback(
             detail = "OAuth state is invalid, expired, or already used.",
         )
     
+    
+    # 4. Handle authorization denial or other OAuth errors
+    if error:
+        raise HTTPException(
+            status_code = 400,
+            detail = "Zoho authorization was denied or failed.",
+        )
+
 
     # 5. Exchange authorization code for tokens
     try: 

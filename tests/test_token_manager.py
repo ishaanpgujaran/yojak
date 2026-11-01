@@ -67,7 +67,7 @@ def test_get_cached_access_token_expired(cache_key):
 @pytest.mark.anyio
 async def test_get_access_token_cache_miss(cache_key):
 
-    tenant_id, connection_id = cache_key
+    tenant_id, authorization_id = cache_key
 
     encrypted_refresh_token = b"encrypted_refresh_token"
 
@@ -78,7 +78,7 @@ async def test_get_access_token_cache_miss(cache_key):
 
     with (
         patch(
-            "zoho.token_manager.get_zoho_refresh_token_for_connection",
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
             new_callable=AsyncMock,
         ) as mock_get_refresh_token,
         patch(
@@ -97,7 +97,7 @@ async def test_get_access_token_cache_miss(cache_key):
         result = await get_access_token(
             pool=AsyncMock(),
             tenant_id=tenant_id,
-            connection_id=connection_id,
+            authorization_id=authorization_id,
         )
 
         assert result == "new_access_token"
@@ -112,7 +112,7 @@ async def test_get_access_token_cache_miss(cache_key):
 @pytest.mark.anyio
 async def test_get_access_token_cache_hit(cache_key):
 
-    tenant_id, connection_id = cache_key
+    tenant_id, authorization_id = cache_key
 
     # Populate the cache first
     cache_access_token(
@@ -125,7 +125,7 @@ async def test_get_access_token_cache_hit(cache_key):
 
     with (
         patch(
-            "zoho.token_manager.get_zoho_refresh_token_for_connection",
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
             new_callable=AsyncMock,
         ) as mock_get_refresh_token,
         patch(
@@ -140,7 +140,7 @@ async def test_get_access_token_cache_hit(cache_key):
         result = await get_access_token(
             pool=AsyncMock(),
             tenant_id=tenant_id,
-            connection_id=connection_id,
+            authorization_id=authorization_id,
         )
 
         assert result == "cached_access_token"
@@ -153,11 +153,11 @@ async def test_get_access_token_cache_hit(cache_key):
 @pytest.mark.anyio
 async def test_get_access_token_missing_authorization(cache_key):
 
-    tenant_id, connection_id = cache_key
+    tenant_id, authorization_id = cache_key
 
     with (
         patch(
-            "zoho.token_manager.get_zoho_refresh_token_for_connection",
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
             new_callable=AsyncMock,
         ) as mock_get_refresh_token,
         patch(
@@ -178,7 +178,7 @@ async def test_get_access_token_missing_authorization(cache_key):
             await get_access_token(
                 pool=AsyncMock(),
                 tenant_id=tenant_id,
-                connection_id=connection_id,
+                authorization_id=authorization_id,
             )
 
         mock_get_refresh_token.assert_awaited_once()
@@ -189,13 +189,13 @@ async def test_get_access_token_missing_authorization(cache_key):
 @pytest.mark.anyio
 async def test_get_access_token_refresh_failure(cache_key):
 
-    tenant_id, connection_id = cache_key
+    tenant_id, authorization_id = cache_key
 
     encrypted_refresh_token = b"encrypted_refresh_token"
 
     with (
         patch(
-            "zoho.token_manager.get_zoho_refresh_token_for_connection",
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
             new_callable=AsyncMock,
         ) as mock_get_refresh_token,
         patch(
@@ -221,7 +221,7 @@ async def test_get_access_token_refresh_failure(cache_key):
             await get_access_token(
                 pool=AsyncMock(),
                 tenant_id=tenant_id,
-                connection_id=connection_id,
+                authorization_id=authorization_id,
             )
 
         mock_get_refresh_token.assert_awaited_once()
@@ -245,7 +245,7 @@ async def test_concurrent_requests_refresh_token_once(cache_key):
 
     with (
         patch(
-            "zoho.token_manager.get_zoho_refresh_token_for_connection",
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
             new_callable=AsyncMock,
         ) as mock_get_refresh_token,
         patch(
@@ -291,7 +291,7 @@ async def test_lock_released_after_refresh_failure(cache_key):
     lock = get_token_lock(cache_key)
 
     with patch(
-        "zoho.token_manager.get_zoho_refresh_token_for_connection",
+        "zoho.token_manager.get_zoho_refresh_token_for_authorization",
         new_callable=AsyncMock,
     ) as mock_get_refresh_token:
 

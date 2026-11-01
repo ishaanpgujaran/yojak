@@ -10,7 +10,6 @@ from app.repositories import (
     create_oauth_state,
     consume_oauth_state,
     create_zoho_authorization,
-    create_merchant_connection,
 )
 from zoho.auth import generate_oauth_state, build_authorization_url
 
@@ -119,20 +118,13 @@ async def connect_zoho(request: Request):
 # Zoho OAuth Callback Endpoint
 @app.get("/oauth/zoho/callback")
 async def zoho_callback(
-        request: Request,
         code: str | None = None,
         state: str | None = None,
         error: str | None = None,
     ):
     
 
-    # 1. Validate the required callback parameters
-    if not code or not code.strip():
-        raise HTTPException(
-            status_code = 400,
-            detail = "Authorization code is missing.",
-        )
-    
+    # 1. Validate the OAuth state parameter
     if not state or not state.strip():
         raise HTTPException(
             status_code = 400,
@@ -174,7 +166,15 @@ async def zoho_callback(
         )
 
 
-    # 5. Exchange authorization code for tokens
+    # 5. Validate the authorization code
+    if not code or not code.strip():
+        raise HTTPException(
+            status_code = 400,
+            detail = "Authorization code is missing.",
+        )
+
+
+    # 6. Exchange authorization code for tokens
     try: 
         token_data = await exchange_authorization_code(code)
     except Exception:
@@ -184,7 +184,7 @@ async def zoho_callback(
         )
     
 
-    # 6. Encrypt the refresh token
+    # 7. Encrypt the refresh token
     try:
         encrypted_refresh_token = encrypt_refresh_token(token_data["refresh_token"])
     except Exception:
@@ -194,7 +194,7 @@ async def zoho_callback(
         )
     
 
-    # 7. Parse granted scopes
+    # 8. Parse granted scopes
     scopes_value = token_data.get("scope", "")
 
     if isinstance(scopes_value, str):
@@ -210,7 +210,7 @@ async def zoho_callback(
         )
     
 
-    # 8. Persist the authorization
+    # 9. Persist the authorization
     try:
         authorization = await create_zoho_authorization(
             pool = pool,
@@ -225,15 +225,15 @@ async def zoho_callback(
         )
     
 
-    # 9. Return a safe success response
+    # 10. Return a safe success response
     return JSONResponse(
         status_code = 200,
         content = {
             "status": "connected",
             "provider": "zoho_inventory",
             "message": (
-                "Zoho authorization was stored successfully."
-                "Organization discover is the next step"
+                "Zoho authorization completed successfully."
+                "You can now discover your organizations."
             ),
             "authorization_id": str(authorization["id"]),
         },

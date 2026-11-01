@@ -252,29 +252,26 @@ async def list_merchant_connections(
     return [dict(row) for row in rows]
 
 
-# 8. Retrieving Encrypted Refresh token for a Merchant connection
-async def get_zoho_refresh_token_for_connection(
+# 8. Retrieving Encrypted Refresh token for a Zoho Authorization
+async def get_zoho_refresh_token_for_authorization(
         pool: asyncpg.Pool,
         tenant_id: UUID,
-        connection_id: UUID,
+        authorization_id: UUID,
     ) -> bytes | None:
     
     query = """
-        SELECT za.refresh_token_encrypted
-        FROM merchant_connections AS mc
-        JOIN zoho_authorizations AS za
-        ON za.id = mc.authorization_id AND za.tenant_id = mc.tenant_id
-        WHERE mc.tenant_id = $1 
-            AND mc.id = $2
-            AND mc.status = 'active'
-            AND za.status = 'active';
+        SELECT refresh_token_encrypted
+        FROM zoho_authorizations
+        WHERE tenant_id = $1
+            AND id = $2
+            AND status = 'active';
     """
 
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
             query,
             tenant_id,
-            connection_id,
+            authorization_id,
         )
 
     return row["refresh_token_encrypted"] if row else None
@@ -362,12 +359,4 @@ async def set_active_organization_connection(
         )
     
     return row is not None
-
-
-
-
-
-
-
-
 

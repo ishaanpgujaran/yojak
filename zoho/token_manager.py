@@ -5,7 +5,7 @@ from typing import Any
 
 import asyncpg
 
-from app.repositories import get_zoho_refresh_token_for_connection
+from app.repositories import get_zoho_refresh_token_for_authorization
 from zoho.crypto import decrypt_refresh_token
 from zoho.client import refresh_access_token
 
@@ -76,12 +76,12 @@ def cache_access_token(
 async def get_access_token(
         pool: asyncpg.Pool,
         tenant_id: UUID,
-        connection_id: UUID,
+        authorization_id: UUID,
     ) -> str:
 
     """Get a valid Zoho access token, using the cache whenever possible."""
 
-    cache_key = (tenant_id, connection_id)
+    cache_key = (tenant_id, authorization_id)
 
     # 1. Check the cache before acquiring lock
     cached_token = get_cached_access_token(cache_key)
@@ -101,10 +101,10 @@ async def get_access_token(
         
 
         # 4. Retrieve the encrypted refresh token from the database
-        encrypted_refresh_token = await get_zoho_refresh_token_for_connection(
+        encrypted_refresh_token = await get_zoho_refresh_token_for_authorization(
             pool,
             tenant_id,
-            connection_id,
+            authorization_id,
         )
 
         if encrypted_refresh_token is None:

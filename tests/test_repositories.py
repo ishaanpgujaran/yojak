@@ -11,7 +11,7 @@ from app.repositories import (
     get_merchant_connection,
     get_tenant,
     list_merchant_connections,
-    get_zoho_refresh_token_for_connection,
+    get_zoho_refresh_token_for_authorization,
     update_zoho_authorization,
 )
 
@@ -140,35 +140,35 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert other_connections == []
 
-            # 11. Retrieve the encrypted refresh token through the connection
-            retrieved_token = await get_zoho_refresh_token_for_connection(
+            # 11. Retrieve the encrypted refresh token through the authorization
+            retrieved_token = await get_zoho_refresh_token_for_authorization(
                 pool,
                 tenant_id,
-                connection_id,
+                authorization_id,
             )
 
             assert retrieved_token == encrypted_refresh_token
             assert isinstance(retrieved_token, bytes)
 
             # 12. Another tenant must not retrieve the token
-            unauthorized_token = await get_zoho_refresh_token_for_connection(
+            unauthorized_token = await get_zoho_refresh_token_for_authorization(
                 pool,
                 other_tenant_id,
-                connection_id,
+                authorization_id,
             )
 
             assert unauthorized_token is None
 
-            # 13. An unknown connection must return None
-            unknown_connection_token = (
-                await get_zoho_refresh_token_for_connection(
+            # 13. An unknown authorization must return None
+            unknown_authorization_token = (
+                await get_zoho_refresh_token_for_authorization(
                     pool,
                     tenant_id,
                     UUID("00000000-0000-0000-0000-000000000001"),
                 )
             )
 
-            assert unknown_connection_token is None
+            assert unknown_authorization_token is None
 
             # 14. Update the shared authorization
             updated_plaintext_token = "updated-test-refresh-token"
@@ -195,11 +195,11 @@ async def test_tenant_and_merchant_connection_operations():
                 "ZohoInventory.salesorders.READ",
             ]
 
-            # The connection must now resolve to the updated encrypted token
-            token_after_update = await get_zoho_refresh_token_for_connection(
+            # The authorization must now resolve to the updated encrypted token
+            token_after_update = await get_zoho_refresh_token_for_authorization(
                 pool,
                 tenant_id,
-                connection_id,
+                authorization_id,
             )
 
             assert token_after_update == updated_encrypted_token

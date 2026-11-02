@@ -137,7 +137,32 @@ async def update_zoho_authorization(
     return dict(row) if row else None
 
 
-# 5. Creating Merchant Connection
+# 5. Retrieve the Active Zoho Authorization for a Tenant
+async def get_active_zoho_authorization(
+        pool: asyncpg.Pool,
+        tenant_id: UUID,
+    ) -> dict[str, Any] | None:
+
+    query = """
+        SELECT
+            id,
+            tenant_id,
+            granted_scopes,
+            status,
+            created_at,
+            updated_at
+        FROM zoho_authorizations
+        WHERE tenant_id = $1 AND status = 'active'
+        ORDER BY updated_at DESC LIMIT 1;
+    """
+
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(query, tenant_id)
+    
+    return dict(row) if row else None
+
+
+# 6. Creating Merchant Connection
 async def create_merchant_connection(
     pool: asyncpg.Pool,
     tenant_id: UUID,
@@ -194,7 +219,7 @@ async def create_merchant_connection(
     return dict(row)
 
 
-# 6. Retrieving Merchant Connection
+# 7. Retrieving Merchant Connection
 async def get_merchant_connection(
     pool: asyncpg.Pool,
     tenant_id: UUID,
@@ -225,7 +250,7 @@ async def get_merchant_connection(
     return dict(row) if row else None    
 
 
-# 7. Listing all multiple Merchant Connections
+# 8. Listing all multiple Merchant Connections
 async def list_merchant_connections(
         pool: asyncpg.Pool,
         tenant_id: UUID,
@@ -252,7 +277,7 @@ async def list_merchant_connections(
     return [dict(row) for row in rows]
 
 
-# 8. Retrieving Encrypted Refresh token for a Zoho Authorization
+# 9. Retrieving Encrypted Refresh token for a Zoho Authorization
 async def get_zoho_refresh_token_for_authorization(
         pool: asyncpg.Pool,
         tenant_id: UUID,
@@ -277,7 +302,7 @@ async def get_zoho_refresh_token_for_authorization(
     return row["refresh_token_encrypted"] if row else None
 
 
-# 9. Store Hashed OAuth State with Limited Lifetime
+# 10. Store Hashed OAuth State with Limited Lifetime
 async def create_oauth_state(
     pool: asyncpg.Pool,
     state: str,
@@ -310,7 +335,7 @@ async def create_oauth_state(
         )
 
 
-# 10. Validate & Consume an Unexpired OAuth State exactly Once
+# 11. Validate & Consume an Unexpired OAuth State exactly Once
 async def consume_oauth_state(
     pool: asyncpg.Pool,
     state: str,
@@ -330,7 +355,7 @@ async def consume_oauth_state(
     return row["tenant_id"] if row else None
 
 
-# 11. Set the Active Zoho Organization Connection for a tenant
+# 12. Set the Active Zoho Organization Connection for a tenant
 async def set_active_organization_connection(
         pool: asyncpg.Pool,
         tenant_id: UUID,

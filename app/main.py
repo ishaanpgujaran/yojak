@@ -10,11 +10,16 @@ from app.repositories import (
     create_oauth_state,
     consume_oauth_state,
     create_zoho_authorization,
+    get_active_zoho_authorization,
+    create_merchant_connection,
 )
-from zoho.auth import generate_oauth_state, build_authorization_url
 
+from zoho.auth import generate_oauth_state, build_authorization_url
 from zoho.client import exchange_authorization_code
 from zoho.crypto import encrypt_refresh_token
+from zoho.organizations import discover_organizations
+
+
 
 
 # MCP Server HTTP Application
@@ -238,6 +243,124 @@ async def zoho_callback(
             "authorization_id": str(authorization["id"]),
         },
     )
+
+
+# Zoho OAuth Organization Discovery Endpoint
+@app.get("/oauth/zoho/organizations")
+async def get_zoho_organizations(request: Request):
+
+    # 1. Extract the WorkOS access token
+    authorization_header = request.header.get("Authorization")
+
+    if not authorization_header or not authorization.header.startswith("Bearer "):
+        raise HTTPException(
+            status_code = 401,
+            detail = "Missing or invalid Authorization header.",
+        )
+    
+    credentials = authorization_header.removeprefix("Bearer ").strip()
+
+
+    # 2. Verify the WorkOS access token
+    try:
+        token = workos_auth.token_verifier.verify_token(credentials)
+    except Exception:
+        raise HTTPException(
+            status_code = 401,
+            detail = "Invalid or expired WorkOS access token.",
+        )
+    
+
+    # 3. Identify the authenticated WorkOS user
+    workos_user_id = token.subject
+
+    if not isinstance(workos_user_id, str) or not workos_user_id.strip():
+        raise HTTPException(
+            status_code = 401,
+            detail = "Authenticated user identity is missing.",
+        )
+    
+
+    # 4. Retrieve te database connection pool
+    pool = runtime.database_pool
+
+    if pool is None:
+        raise HTTPException(
+            status_code = 503,
+            detail = "Database connection pool is unavailable.",
+        )
+    
+
+    # 5. Resolve the tenant 
+    tenant = await get_or_create_tenant(pool, workos_user_id)
+    tenant_id = tenant["id"]
+
+
+    # 6. Retrieve the tenant's active Zoho Authorization
+    zoho_authorization = await get_active_zoho_authorization(
+        pool,
+        tenant_id,
+    )
+
+    if zoho_authorization is None:
+        raise HTTPException(
+            status_code = 404,
+            detail = "No active Zoho authorization found. Connect Zoho first.",
+        )
+    
+
+    # 7. Discover Zoho Organizations
+    organizations = await discover_organizations(
+        pool,
+        tenant_id,
+        zoho_authorization["id"],
+    )
+
+
+    # 8. Handle Zero Organizations
+    if len(organizations) == 0:
+        return {
+            "status": "no_organizations_found",
+            "selection_required": False,
+            "message": "No Zoho organizations were found for this account.",
+        }
+    
+
+    # 9. Handle a Single Organization
+    if len(organizations) == 1:
+        organization = organizations[0]
+
+        connection  = await create_merchant_connection(
+            pool,
+            tenant_id,
+            zoho_authorization["id"],
+            organization["organization_id"],
+        )
+
+        return {
+            "status": "connected",
+            "selection_required": False,
+            "connection": {
+                "id": str(connection["id"]),
+                "organization_id": connection["zoho_organization_id"],
+                "organization_name": organization.get("name"),
+            },
+        }
+
+
+        # 10. Handle Multiple Organizations
+        return {
+            "status": "selection_required",
+            "selection_required": True,
+            "message": "Multiple Zoho organizations were found. Please select one.",
+            "organizations": [
+                {
+                    "organization_id":organization["organization_id"],
+                    "name": organization.get("name"),
+                }
+                for organization in organizations
+            ],
+        }
 
 
 # Exposing Resource Metadata URL in Outer Application using add_route()

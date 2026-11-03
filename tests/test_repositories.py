@@ -140,7 +140,33 @@ async def test_tenant_and_merchant_connection_operations():
             assert "refresh_token_encrypted" not in merchant_connection
             assert "granted_scopes" not in merchant_connection
 
-            # 10. Retrieve the merchant connection
+            # 10. Creating the same merchant connection again must return the existing connection
+            duplicate_connection = await create_merchant_connection(
+                pool,
+                tenant_id,
+                authorization_id,
+                "test-org-001",
+            )
+
+            assert duplicate_connection["id"] == connection_id
+            assert duplicate_connection["tenant_id"] == tenant_id
+            assert duplicate_connection["zoho_organization_id"] == "test-org-001"
+
+            # Verify that only one connection exists for this tenant & organization
+            async with pool.acquire() as connection:
+                connection_count = await connection.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM merchant_connections
+                    WHERE tenant_id = $1 AND zoho_organization_id = $2;
+                    """,
+                    tenant_id,
+                    "test-org-001",
+                )
+            
+            assert connection_count == 1
+
+            # 11. Retrieve the merchant connection
             retrieved_connection = await get_merchant_connection(
                 pool,
                 tenant_id,
@@ -151,7 +177,7 @@ async def test_tenant_and_merchant_connection_operations():
             assert retrieved_connection["id"] == connection_id
             assert retrieved_connection["authorization_id"] == authorization_id
 
-            # 11. A different tenant must not retrieve this connection
+            # 12. A different tenant must not retrieve this connection
             unauthorized_lookup = await get_merchant_connection(
                 pool,
                 other_tenant_id,
@@ -160,7 +186,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert unauthorized_lookup is None
 
-            # 12. List the tenant's merchant connections
+            # 13. List the tenant's merchant connections
             connections = await list_merchant_connections(
                 pool,
                 tenant_id,
@@ -169,7 +195,7 @@ async def test_tenant_and_merchant_connection_operations():
             assert len(connections) == 1
             assert connections[0]["id"] == connection_id
 
-            # 13. Another tenant must not see this connection in its list
+            # 14. Another tenant must not see this connection in its list
             other_connections = await list_merchant_connections(
                 pool,
                 other_tenant_id,
@@ -177,7 +203,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert other_connections == []
 
-            # 14. Retrieve the encrypted refresh token through the authorization
+            # 15. Retrieve the encrypted refresh token through the authorization
             retrieved_token = await get_zoho_refresh_token_for_authorization(
                 pool,
                 tenant_id,
@@ -187,7 +213,7 @@ async def test_tenant_and_merchant_connection_operations():
             assert retrieved_token == encrypted_refresh_token
             assert isinstance(retrieved_token, bytes)
 
-            # 15. Another tenant must not retrieve the token
+            # 16. Another tenant must not retrieve the token
             unauthorized_token = await get_zoho_refresh_token_for_authorization(
                 pool,
                 other_tenant_id,
@@ -196,7 +222,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert unauthorized_token is None
 
-            # 16. An unknown authorization must return None
+            # 17. An unknown authorization must return None
             unknown_authorization_token = (
                 await get_zoho_refresh_token_for_authorization(
                     pool,
@@ -207,7 +233,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert unknown_authorization_token is None
 
-            # 17. Update the shared authorization
+            # 18. Update the shared authorization
             updated_plaintext_token = "updated-test-refresh-token"
             updated_encrypted_token = encrypt_refresh_token(
                 updated_plaintext_token
@@ -241,7 +267,7 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert token_after_update == updated_encrypted_token
 
-            # 18. Updating a nonexistent authorization must return None
+            # 19. Updating a nonexistent authorization must return None
             missing_authorization = await update_zoho_authorization(
                 pool,
                 tenant_id,

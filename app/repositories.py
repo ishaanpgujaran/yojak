@@ -170,7 +170,7 @@ async def create_merchant_connection(
     zoho_organization_id: str, 
     ) -> dict[str, Any]:
     
-    query = """
+    insert_query = """
         INSERT INTO merchant_connections(
             tenant_id,
             provider,
@@ -202,14 +202,38 @@ async def create_merchant_connection(
             updated_at;
     """
 
+    existing_query = """
+        SELECT
+            id,
+            tenant_id,
+            provider,
+            zoho_organization_id,
+            authorization_id,
+            status,
+            created_at,
+            updated_at
+        FROM merchant_connections
+        WHERE tenant_id = $1 AND zoho_organization_id = $2;
+        """
+
+
     async with pool.acquire() as connection:
+        # Attempt to create a New merchant connection
         row = await connection.fetchrow(
-            query,
+            insert_query,
             tenant_id,
             authorization_id,
             zoho_organization_id,
         )
-    
+
+        # If insertion did not happen, check whether it already exists
+        if row is None:
+            row = await connection.fetchrow(
+                existing_query,
+                tenant_id,
+                zoho_organization_id,                
+            )
+
     if row is None:
         raise ValueError(
             "Connection was not createed. The authorization may be invalid,"

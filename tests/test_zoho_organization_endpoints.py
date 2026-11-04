@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import AsyncMock
 
@@ -17,6 +16,11 @@ WORKOS_USER_ID = "test_workos_user_001"
 WORKOS_TOKEN = "test-workos-access-token"
 
 
+# ---------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------
+
+
 @pytest.fixture
 def setup_endpoint_mocks(monkeypatch):
 
@@ -27,26 +31,16 @@ def setup_endpoint_mocks(monkeypatch):
         object(),
     )
 
-    # Mock WorkOS token verification
-    monkeypatch.setattr(
-        main.workos_auth.token_verifier,
-        "verify_token",
-        lambda credentials: SimpleNamespace(
-            subject=WORKOS_USER_ID
-        ),
-    )
+    # Mock authenticated tenant context
+    async def mock_authenticated_tenant_context():
+        return {
+            "pool": main.runtime.database_pool,
+            "tenant_id": TENANT_ID,
+        }
 
-    # Mock tenant resolution
-    monkeypatch.setattr(
-        main,
-        "get_or_create_tenant",
-        AsyncMock(
-            return_value={
-                "id": TENANT_ID,
-                "workos_user_id": WORKOS_USER_ID,
-            }
-        ),
-    )
+    main.app.dependency_overrides[
+        main.get_authenticated_tenant_context
+    ] = mock_authenticated_tenant_context
 
     # Mock active Zoho authorization lookup
     monkeypatch.setattr(
@@ -95,9 +89,18 @@ def setup_endpoint_mocks(monkeypatch):
         AsyncMock(return_value=True),
     )
 
+    yield
+
+    # Remove dependency override after the test
+    main.app.dependency_overrides.pop(
+        main.get_authenticated_tenant_context,
+        None,
+    )
+
 
 @pytest.fixture
 async def client():
+
     transport = httpx.ASGITransport(app=main.app)
 
     async with httpx.AsyncClient(
@@ -174,6 +177,17 @@ async def test_discover_single_organization(
     assert data["connection"]["organization_id"] == "org-001"
     assert data["connection"]["organization_name"] == "ABC Technologies"
 
+    main.get_active_zoho_authorization.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+    )
+
+    main.discover_organizations.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+        AUTHORIZATION_ID,
+    )
+
     main.create_merchant_connection.assert_awaited_once_with(
         main.runtime.database_pool,
         TENANT_ID,
@@ -229,6 +243,31 @@ async def test_discover_multiple_organizations(
     # No connection should be created before user selection
     main.create_merchant_connection.assert_not_called()
     main.set_active_organization_connection.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_discover_organizations_without_authorization(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+
+    main.get_active_zoho_authorization.return_value = None
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+
+    assert (
+        response.json()["detail"]
+        == "No active Zoho authorization found. Connect Zoho first."
+    )
+
+    main.discover_organizations.assert_not_called()
+    main.create_merchant_connection.assert_not_called()
 
 
 # ---------------------------------------------------------
@@ -324,7 +363,7 @@ async def test_select_inaccessible_organization(
         == "The selected organization is not accessible through this Zoho authorization."
     )
 
-    # Unauthorized organization must never be connected
+    # Inaccessible organization must never be connected
     main.create_merchant_connection.assert_not_called()
     main.set_active_organization_connection.assert_not_called()
 
@@ -376,10 +415,10 @@ async def test_select_organization_without_selection(
 
 
 @pytest.mark.anyio
-async def test_discover_organizations_without_token(
-    client,
-    setup_endpoint_mocks,
-):
+async def test_discover_organizations_without_token(client):
+
+    # No dependency override here.
+    # The actual authentication dependency must reject this request.
 
     response = await client.get(
         "/oauth/zoho/organizations",
@@ -389,10 +428,10 @@ async def test_discover_organizations_without_token(
 
 
 @pytest.mark.anyio
-async def test_select_organization_without_token(
-    client,
-    setup_endpoint_mocks,
-):
+async def test_select_organization_without_token(client):
+
+    # No dependency override here.
+    # The actual authentication dependency must reject this request.
 
     response = await client.post(
         "/oauth/zoho/organizations/select",

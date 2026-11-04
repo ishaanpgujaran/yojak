@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 
 from fastmcp.utilities.lifespan import combine_lifespans
@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from yojak_mcp.server import mcp, workos_auth
 
 from app import runtime
+from app.dependencies import get_authenticated_tenant_context
 from app.repositories import (
     get_or_create_tenant, 
     create_oauth_state,
@@ -257,56 +258,16 @@ async def zoho_callback(
 
 # Zoho OAuth Organization Discovery Endpoint
 @app.get("/oauth/zoho/organizations")
-async def get_zoho_organizations(request: Request):
+async def get_zoho_organizations(
+        context: dict = Depends(get_authenticated_tenant_context),
+    ):
 
-    # 1. Extract the WorkOS access token
-    authorization_header = request.headers.get("Authorization")
-
-    if not authorization_header or not authorization_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code = 401,
-            detail = "Missing or invalid Authorization header.",
-        )
-    
-    credentials = authorization_header.removeprefix("Bearer ").strip()
-
-
-    # 2. Verify the WorkOS access token
-    try:
-        token = workos_auth.token_verifier.verify_token(credentials)
-    except Exception:
-        raise HTTPException(
-            status_code = 401,
-            detail = "Invalid or expired WorkOS access token.",
-        )
+    # 1. Retrieve authenticated tenant context using Dependencies
+    pool = context["pool"],
+    tenant_id = context["tenant_id"]
     
 
-    # 3. Identify the authenticated WorkOS user
-    workos_user_id = token.subject
-
-    if not isinstance(workos_user_id, str) or not workos_user_id.strip():
-        raise HTTPException(
-            status_code = 401,
-            detail = "Authenticated user identity is missing.",
-        )
-    
-
-    # 4. Retrieve te database connection pool
-    pool = runtime.database_pool
-
-    if pool is None:
-        raise HTTPException(
-            status_code = 503,
-            detail = "Database connection pool is unavailable.",
-        )
-    
-
-    # 5. Resolve the tenant 
-    tenant = await get_or_create_tenant(pool, workos_user_id)
-    tenant_id = tenant["id"]
-
-
-    # 6. Retrieve the tenant's active Zoho Authorization
+    # 2. Retrieve the tenant's active Zoho Authorization
     zoho_authorization = await get_active_zoho_authorization(
         pool,
         tenant_id,
@@ -319,7 +280,7 @@ async def get_zoho_organizations(request: Request):
         )
     
 
-    # 7. Discover Zoho Organizations
+    # 3. Discover Zoho Organizations
     organizations = await discover_organizations(
         pool,
         tenant_id,
@@ -327,7 +288,7 @@ async def get_zoho_organizations(request: Request):
     )
 
 
-    # 8. Handle Zero Organizations
+    # 4. Handle Zero Organizations
     if len(organizations) == 0:
         return {
             "status": "no_organizations_found",
@@ -336,7 +297,7 @@ async def get_zoho_organizations(request: Request):
         }
     
 
-    # 9. Handle a Single Organization
+    # 5. Handle a Single Organization
     if len(organizations) == 1:
         organization = organizations[0]
 
@@ -371,7 +332,7 @@ async def get_zoho_organizations(request: Request):
         }
 
 
-    # 10. Handle Multiple Organizations
+    # 6. Handle Multiple Organizations
     return {
         "status": "selection_required",
         "selection_required": True,
@@ -390,57 +351,15 @@ async def get_zoho_organizations(request: Request):
 @app.post("/oauth/zoho/organizations/select")
 async def select_zoho_organization(
         selection: ZohoOrganizationSelection,
-        request: Request,
+        context: dict = Depends(get_authenticated_tenant_context),
     ):
 
-    # 1. Extract the WorkOS access token
-    authorization_header = request.headers.get("Authorization")
-
-    if not authorization_header or not authorization_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code = 401,
-            detail = " Missing or invalid Authorization header.",
-        )
-    
-    credentials = authorization_header.removeprefix("Bearer ").strip()
-
-
-    # 2. Verify the WorkOS access token
-    try:
-        token = workos_auth.token_verifier.verify_token(credentials)
-    except Exception:
-        raise HTTPException(
-            status_code = 401,
-            detail = "Invalid or expired WorkOS access token.",
-        )
+    # 1. Retrieve authenticated tenant context using Dependencies
+    pool = context["pool"]
+    tenant_id = context["tenant_id"]
     
 
-    # 3. Identify the authenticated user
-    workos_user_id = token.subject
-
-    if not isinstance(workos_user_id, str) or not workos_user_id.strip():
-        raise HTTPException(
-            status_code = 401,
-            detail = "Authenticated user identity is missing.",
-        )
-    
-
-    # 4. Retrieve the database connection pool
-    pool = runtime.database_pool
-
-    if pool is None:
-        raise HTTPException(
-            status_code = 503,
-            detail = "Database connection pool is unavailable.",
-        )
-    
-
-    # 5. Resolve the tenant
-    tenant = await get_or_create_tenant(pool, workos_user_id)
-    tenant_id = tenant["id"]
-
-
-    # 6. Retrieve the active Zoho authorization
+    # 2. Retrieve the active Zoho authorization
     zoho_authorization = await get_active_zoho_authorization(
         pool,
         tenant_id,
@@ -453,7 +372,7 @@ async def select_zoho_organization(
         )
     
 
-    # 7. Discover organizations accessible through this authorization
+    # 3. Discover organizations accessible through this authorization
     organizations = await discover_organizations(
         pool,
         tenant_id,
@@ -461,7 +380,7 @@ async def select_zoho_organization(
     )
 
 
-    # 8. Verify that the selected organization is accessible
+    # 4. Verify that the selected organization is accessible
     selected_organization = next(
         (
             organization for organization in organizations 
@@ -477,7 +396,7 @@ async def select_zoho_organization(
         )
     
 
-    # 9. Create or retrieve the merchant connection
+    # 5. Create or retrieve the merchant connection
     connection = await create_merchant_connection(
         pool,
         tenant_id,
@@ -486,7 +405,7 @@ async def select_zoho_organization(
     )
 
 
-    # 10. Set the selected organization as active
+    # 6. Set the selected organization as active
     is_active = await set_active_organization_connection(
         pool,
         tenant_id,
@@ -500,7 +419,7 @@ async def select_zoho_organization(
         )
     
 
-    # 11. Return the connected organization
+    # 7. Return the connected organization
     return {
         "status": "connected",
         "connection": {

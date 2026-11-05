@@ -263,7 +263,7 @@ async def get_zoho_organizations(
     ):
 
     # 1. Retrieve authenticated tenant context using Dependencies
-    pool = context["pool"],
+    pool = context["pool"]
     tenant_id = context["tenant_id"]
     
 

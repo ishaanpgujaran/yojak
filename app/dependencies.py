@@ -3,7 +3,7 @@ import asyncpg
 from fastapi import HTTPException, Request
 
 from app.repositories import get_or_create_tenant
-from app.runtime import runtime
+from app import runtime
 
 from yojak_mcp.server import workos_auth
 

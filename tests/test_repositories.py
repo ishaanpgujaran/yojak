@@ -343,3 +343,76 @@ async def test_concurrent_tenant_creation():
                         "DELETE FROM tenants WHERE id = $1;",
                         tenant_id,
                     )
+
+
+@pytest.mark.asyncio
+async def test_create_zoho_authorization_updates_existing_record():
+    async with lifespan_database() as pool:
+
+        try:
+            tenant = await get_or_create_tenant(
+                pool,
+                "workos_user_zoho_reconnect_test",
+            )
+            tenant_id = tenant["id"]
+
+            first_token = b"encrypted_refresh_token_1"
+            first_scopes = [
+                "ZohoInventory.items.READ",
+                "ZohoInventory.salesorders.READ",
+            ]
+
+            first_authorization = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                first_token,
+                first_scopes,
+            )
+
+            assert first_authorization is not None
+            assert first_authorization["tenant_id"] == tenant_id
+            assert first_authorization["status"] == "active"
+
+            second_token = b"encrypted_refresh_token_2"
+            second_scopes = [
+                "ZohoInventory.items.READ",
+                "ZohoInventory.salesorders.READ",
+                "ZohoInventory.settings.READ",
+            ]
+
+            second_authorization = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                second_token,
+                second_scopes,
+            )
+
+            assert second_authorization is not None
+
+            # The existing authorization record must be reused.
+            assert second_authorization["id"] == first_authorization["id"]
+
+            # The original creation timestamp must remain unchanged.
+            assert second_authorization["created_at"] == first_authorization["created_at"]
+
+            # The authorization details must be updated.
+            assert second_authorization["granted_scopes"] == second_scopes
+            assert second_authorization["status"] == "active"
+
+            # Verify the encrypted refresh token was actually replaced.
+            stored_token = await get_zoho_refresh_token_for_authorization(
+                pool,
+                tenant_id,
+                second_authorization["id"],
+            )
+
+            assert stored_token == second_token
+        finally:
+            # Clean up the test tenant
+            if tenant_id is not None:
+                async with pool.acquire() as connection:
+                    await connection.execute(
+                        "DELETE FROM tenants WHERE id = $1;",
+                        tenant_id,
+                    )
+

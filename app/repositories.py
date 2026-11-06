@@ -75,6 +75,14 @@ async def create_zoho_authorization(
             status
         )
         VALUES ($1, $2, $3, $4)
+
+        ON CONFLICT (tenant_id)
+        DO UPDATE SET 
+            refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
+            granted_scopes = EXCLUDED.granted_scopes,
+            status = EXCLUDED.status,
+            updated_at = NOW()
+
         RETURNING
             id,
             tenant_id,

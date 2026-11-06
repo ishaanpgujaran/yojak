@@ -16,8 +16,8 @@ CREATE TABLE zoho_authorizations (
                 'error'
             )
         ),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     -- Supports composite foreign keys that enforce tenant ownership
     UNIQUE (id, tenant_id)
@@ -42,7 +42,7 @@ ALTER COLUMN authorization_id SET NOT NULL;
 
 -- 5. Add a Composite Unique constraint to support tenant-safe foreign key
 ALTER TABLE merchant_connections
-ADD CONSTRAINT merchant_connections_id_tenant_unique UIQUE (id, tenant_id);
+ADD CONSTRAINT merchant_connections_id_tenant_unique UNIQUE (id, tenant_id);
 
 
 -- 6. Ensure the referenced authorization belongs to the same tenant as the connection
@@ -62,12 +62,12 @@ ADD COLUMN active_organization_connection_id UUID;
 ALTER TABLE tenants
 ADD CONSTRAINT tenant_active_connection_same_tenant_fk
 FOREIGN KEY (active_organization_connection_id, id)
-REFERENCES merchant_connections(id, tenant_id) DEFERRABLE INITIALLY DEFERRED
+REFERENCES merchant_connections(id, tenant_id) DEFERRABLE INITIALLY DEFERRED;
 
 
 -- 9. Remove old token fields from organization connections.
 ALTER TABLE merchant_connections
-DROP COLUMN refresh_token_encrypted
+DROP COLUMN refresh_token_encrypted;
 
 ALTER TABLE merchant_connections
-DROP COLUMN granted_scopes
+DROP COLUMN granted_scopes;

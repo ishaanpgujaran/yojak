@@ -191,7 +191,7 @@ async def create_merchant_connection(
             'zoho_inventory',
             $3,
             $2, 
-            'active'
+            'pending'
         WHERE EXISTS (
             SELECT 1 
             FROM zoho_authorizations
@@ -387,33 +387,92 @@ async def consume_oauth_state(
     return row["tenant_id"] if row else None
 
 
-# 12. Set the Active Zoho Organization Connection for a tenant
+# 12. Set the Active Zoho Organization Connection for a tenant & Deactivate any previous active connection
 async def set_active_organization_connection(
         pool: asyncpg.Pool,
         tenant_id: UUID,
         connection_id: UUID,
     ) -> bool:
 
-    query = """
-        UPDATE tenants AS t
-        SET active_organization_connection_id = mc.id
-        FROM merchant_connections AS mc
-        JOIN zoho_authorizations AS za
-        ON za.id = mc.authorization_id AND za.tenant_id = mc.tenant_id
-        WHERE t.id = $1
-            AND mc.id = $2
-            AND mc.tenant_id = t.id
-            AND mc.status = 'active'
-            AND za.status = 'active'
-        RETURNING t.id;
-    """
-
     async with pool.acquire() as connection:
-        row = await connection.fetchrow(
-            query,
-            tenant_id,
-            connection_id,
-        )
+        async with connection.transaction():
+
+            # Lock the tenant row to serialize organization switches.
+            tenant = await connection.fetchrow(
+                """
+                SELECT id
+                FROM tenants
+                WHERE id = $1
+                FOR UPDATE;
+                """,
+                tenant_id,
+            )
+
+            if tenant is None:
+                return False
+            
+
+            # Verify that the selected connection belongs to this tenant
+            # And it is linked to an active Zoho authorization
+            selected_connection = await connection.fetchrow(
+                """
+                SELECT mc.id 
+                FROM merchant_connections AS mc
+                JOIN zoho_authorizations AS za
+                    ON za.id = mc.authorization_id
+                    AND za.tenant_id = mc.tenant_id
+                WHERE mc.id = $1 
+                    AND mc.tenant_id = $2
+                    AND mc.status IN ('pending', 'active', 'inactive')
+                    AND za.status = 'active';
+                """,
+                connection_id,
+                tenant_id
+            )
+
+            if selected_connection is None:
+                return False
+            
+
+            # Deactivate the previously selected & active connection
+            await connection.execute(
+                """
+                UPDATE merchant_connections
+                SET status = 'inactive',
+                    updated_at = NOW()
+                WHERE tenant_id = $1
+                    AND status = 'active'
+                    AND id != $2;
+                """,
+                tenant_id,
+                connection_id,
+            )
+
+
+            # Activate the newly selected or created connection
+            await connection.execute(
+                """
+                UPDATE merchant_connections
+                SET status = 'active',
+                    updated_at = NOW()
+                WHERE id = $1
+                    AND tenant_id = $2;
+                """,
+                connection_id,
+                tenant_id,
+            )
+
+
+            # Update the tenant's active connection pointer
+            await connection.execute(
+                """
+                UPDATE tenants
+                SET active_organization_connection_id = $2
+                WHERE id = $1;
+                """,
+                tenant_id,
+                connection_id,
+            )
     
-    return row is not None
+    return True
 

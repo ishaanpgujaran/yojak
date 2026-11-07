@@ -3,6 +3,8 @@ import asyncio
 
 import pytest
 
+import asyncpg
+
 from app.database import lifespan_database
 from app.repositories import (
     create_merchant_connection,
@@ -14,6 +16,7 @@ from app.repositories import (
     get_zoho_refresh_token_for_authorization,
     update_zoho_authorization,
     get_active_zoho_authorization,
+    set_active_organization_connection,
 )
 
 from zoho.crypto import encrypt_refresh_token
@@ -136,7 +139,7 @@ async def test_tenant_and_merchant_connection_operations():
             assert merchant_connection["provider"] == "zoho_inventory"
             assert merchant_connection["zoho_organization_id"] == "test-org-001"
             assert merchant_connection["authorization_id"] == authorization_id
-            assert merchant_connection["status"] == "active"
+            assert merchant_connection["status"] == "pending"
             assert "refresh_token_encrypted" not in merchant_connection
             assert "granted_scopes" not in merchant_connection
 
@@ -166,16 +169,32 @@ async def test_tenant_and_merchant_connection_operations():
             
             assert connection_count == 1
 
-            # 11. Retrieve the merchant connection
-            retrieved_connection = await get_merchant_connection(
+            # 11. Activate the merchant connection & Retrieve the merchant connection
+            activation_result = await set_active_organization_connection(
                 pool,
                 tenant_id,
                 connection_id,
             )
 
-            assert retrieved_connection is not None
-            assert retrieved_connection["id"] == connection_id
-            assert retrieved_connection["authorization_id"] == authorization_id
+            assert activation_result is True
+
+            # Verify that the connection is now active
+            retrieved_active_connection = await get_merchant_connection(
+                pool,
+                tenant_id,
+                connection_id,
+            )
+
+            assert retrieved_active_connection is not None
+            assert retrieved_active_connection["id"] == connection_id
+            assert retrieved_active_connection["authorization_id"] == authorization_id
+            assert retrieved_active_connection["status"] == "active"
+
+            # Verify that the tenant points to this active connection
+            updated_tenant = await get_tenant(pool, tenant_id,)
+
+            assert updated_tenant is not None
+            assert updated_tenant["active_organization_connection_id"] == connection_id
 
             # 12. A different tenant must not retrieve this connection
             unauthorized_lookup = await get_merchant_connection(
@@ -278,9 +297,284 @@ async def test_tenant_and_merchant_connection_operations():
 
             assert missing_authorization is None
 
+            # 20. Create a second organization connection
+            # The new connection should initially have pending status
+            second_merchant_connection = await create_merchant_connection(
+                pool,
+                tenant_id,
+                authorization_id,
+                "test-org-002",
+            )
+
+            second_connection_id = second_merchant_connection["id"]
+
+            assert second_merchant_connection["tenant_id"] == tenant_id
+            assert second_merchant_connection["zoho_organization_id"] == "test-org-002"
+            assert second_merchant_connection["status"] == "pending"
+            assert second_connection_id != connection_id
+
+            # 21. Switc from the first organization to the second organization
+            # The first connection should become inactive 
+            # The second connection should become active
+            second_activation_result = await set_active_organization_connection(
+                pool,
+                tenant_id,
+                second_connection_id,
+            )
+
+            assert second_activation_result is True
+
+            # 22. Verify the connection statuses after switching
+            first_connection_after_switch = await get_merchant_connection(
+                pool,
+                tenant_id,
+                connection_id,
+            )
+
+            second_connection_after_switch = await get_merchant_connection(
+                pool,
+                tenant_id,
+                second_connection_id,
+            )
+
+            assert first_connection_after_switch is not None
+            assert second_connection_after_switch is not None
+            assert first_connection_after_switch["status"] == "inactive"
+            assert second_connection_after_switch["status"] == "active"
+
+            # 23. Verify that the tenant points to the second organization
+            updated_tenant_after_switch = await get_tenant(pool, tenant_id,)
+
+            assert updated_tenant_after_switch is not None
+            assert (
+                updated_tenant_after_switch["active_organization_connection_id"] == second_connection_id
+            )
+
+            # 24. Switch back to the first organization 
+            # The existing connection should be reused and reactivated
+            switch_back_result = await set_active_organization_connection(
+                pool,
+                tenant_id,
+                connection_id,
+            )
+
+            assert switch_back_result is True
+
+            # 25. Verify the connection statuses after switching back
+            first_connection_after_switch_back = await get_merchant_connection(
+                pool,
+                tenant_id,
+                connection_id,
+            )
+
+            second_connection_after_switch_back = await get_merchant_connection(
+                pool,
+                tenant_id,
+                second_connection_id,
+            )
+
+            assert first_connection_after_switch_back is not None
+            assert second_connection_after_switch_back is not None
+            assert first_connection_after_switch_back["status"] == "active"
+            assert second_connection_after_switch_back["status"] == "inactive"
+
+            # 26. Verify that the tenant now points back to the first organization 
+            updated_tenant_after_switch_back = await get_tenant(pool, tenant_id,)
+
+            assert updated_tenant_after_switch_back is not None
+            assert(
+                updated_tenant_after_switch_back["active_organization_connection_id"] == connection_id
+            ) 
+
+            # 27. Verify that only one active connection exists for this tenant
+            async with pool.acquire() as connection:
+                active_connection_count = await connection.fetchval(
+                    """
+                    SELECT COUNT(*)
+                    FROM merchant_connections
+                    WHERE tenant_id = $1
+                    AND status = 'active';
+                    """,
+                    tenant_id,
+                )
+
+            assert active_connection_count == 1
+
+            # 28. An inactive Zoho authorization must prevent organization activation
+            # Mark the tenant's Zoho authorization as inactive.
+            async with pool.acquire() as connection:
+                await connection.execute(
+                    """
+                    UPDATE zoho_authorizations
+                    SET status = 'revoked'
+                    WHERE id = $1 AND tenant_id = $2;
+                    """,
+                    authorization_id,
+                    tenant_id,
+                )
+
+            # Attempt to activate the second organization.
+            # Its authorization is no longer active, so this must fail.
+            inactive_authorization_result = (
+                await set_active_organization_connection(
+                    pool,
+                    tenant_id,
+                    second_connection_id,
+                )
+            )
+
+            assert inactive_authorization_result is False
+
+            # Verify that the existing active connection remains unchanged.
+            first_connection_after_failed_activation = (
+                await get_merchant_connection(
+                    pool,
+                    tenant_id,
+                    connection_id,
+                )
+            )
+
+            second_connection_after_failed_activation = (
+                await get_merchant_connection(
+                    pool,
+                    tenant_id,
+                    second_connection_id,
+                )
+            )
+
+            assert first_connection_after_failed_activation["status"] == "active"
+            assert second_connection_after_failed_activation["status"] == "inactive"
+
+            # The tenant's active pointer must also remain unchanged.
+            tenant_after_failed_activation = await get_tenant(
+                pool,
+                tenant_id,
+            )
+
+            assert (
+                tenant_after_failed_activation["active_organization_connection_id"]
+                == connection_id
+            )
+
+            # 29. Restore the Zoho authorization for the rollback test
+            # The previous test marked it as revoked.
+            async with pool.acquire() as connection:
+                await connection.execute(
+                    """
+                    UPDATE zoho_authorizations
+                    SET status = 'active'
+                    WHERE id = $1 AND tenant_id = $2;
+                    """,
+                    authorization_id,
+                    tenant_id,
+                )
+
+            # 30. Create a temporary PostgreSQL trigger to simulate a failure
+            # when updating the tenant's active organization connection.
+            async with pool.acquire() as connection:
+
+                # Remove any leftover trigger/function from a previous
+                # interrupted test run.
+                await connection.execute(
+                    """
+                    DROP TRIGGER IF EXISTS test_active_pointer_failure
+                    ON tenants;
+                    """
+                )
+
+                await connection.execute(
+                    """
+                    DROP FUNCTION IF EXISTS test_fail_active_pointer_update();
+                    """
+                )
+
+                # Create a function that deliberately raises an exception.
+                await connection.execute(
+                    """
+                    CREATE FUNCTION test_fail_active_pointer_update()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        RAISE EXCEPTION
+                            'Simulated tenant pointer update failure';
+                    END;
+                    $$ LANGUAGE plpgsql;
+                    """
+                )
+
+                # Execute the function whenever the active connection pointer
+                # on a tenant is updated.
+                await connection.execute(
+                    """
+                    CREATE TRIGGER test_active_pointer_failure
+                    BEFORE UPDATE OF active_organization_connection_id
+                    ON tenants
+                    FOR EACH ROW
+                    EXECUTE FUNCTION test_fail_active_pointer_update();
+                    """
+                )
+
+            # 31. Attempt to switch to the second organization.
+            # The connection-status updates will execute first, but the
+            # tenant-pointer update will fail because of our trigger.
+            # The entire transaction should therefore be rolled back.
+            with pytest.raises(asyncpg.PostgresError):
+                await set_active_organization_connection(
+                    pool,
+                    tenant_id,
+                    second_connection_id,
+                )
+
+            # 32. Verify that the connection statuses were rolled back.
+            first_connection_after_rollback = await get_merchant_connection(
+                pool,
+                tenant_id,
+                connection_id,
+            )
+
+            second_connection_after_rollback = await get_merchant_connection(
+                pool,
+                tenant_id,
+                second_connection_id,
+            )
+
+            assert first_connection_after_rollback is not None
+            assert second_connection_after_rollback is not None
+
+            assert first_connection_after_rollback["status"] == "active"
+            assert second_connection_after_rollback["status"] == "inactive"
+
+            # 33. Verify that the tenant's active connection pointer
+            # still references the first organization.
+            tenant_after_rollback = await get_tenant(
+                pool,
+                tenant_id,
+            )
+
+            assert tenant_after_rollback is not None
+            assert (
+                tenant_after_rollback["active_organization_connection_id"]
+                == connection_id
+            )
+
+
         finally:
             # Deleting tenants cascades to their authorizations and connections
             async with pool.acquire() as connection:
+                # Remove the temporary triggers & function used by rollback test
+                await connection.execute(
+                    """
+                    DROP TRIGGER IF EXISTS test_active_pointer_failure
+                    ON tenants;
+                    """
+                )
+
+                await connection.execute(
+                    """
+                    DROP FUNCTION IF EXISTS test_fail_active_pointer_update();
+                    """
+                )
+
+                # Deleting tenants cascades to their authorizations and connections
                 if tenant_id is not None:
                     await connection.execute(
                         "DELETE FROM tenants WHERE id = $1;",

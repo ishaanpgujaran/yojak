@@ -5,9 +5,15 @@ from typing import Any
 
 import asyncpg
 
-from app.repositories import get_zoho_refresh_token_for_authorization
+from app.repositories import (
+    get_zoho_refresh_token_for_authorization,
+    update_zoho_authorization_status,
+)
 from zoho.crypto import decrypt_refresh_token
-from zoho.client import refresh_access_token
+from zoho.client import (
+    refresh_access_token,
+    ZohoRefreshTokenError,
+)
 
 
 # 1. In-memory Cache for Zoho Access Tokens
@@ -116,7 +122,21 @@ async def get_access_token(
         
 
         # 6. Request a new access token from Zoho
-        token_data = await refresh_access_token(refresh_token)
+        try: 
+            token_data = await refresh_access_token(refresh_token)
+        except ZohoRefreshTokenError as error:
+            # A definitive invalid refresh token means authorization is revoked.
+            if error.error_code == "invalid_code":
+                await update_zoho_authorization_status(
+                    pool,
+                    tenant_id,
+                    authorization_id,
+                    "revoked",
+                )
+
+                # Remove any cached token associated with this authorization
+                _token_cache.pop(cache_key, None)
+            raise
 
 
         # 7. Store the new access token in cache

@@ -2,6 +2,17 @@ from typing import Any
 import httpx
 from app.config import settings
 
+
+# Class for preserving the Error Code from Zoho for invalid refresh token
+class ZohoRefreshTokenError(ValueError):
+
+    def __init__(self, error_code: str):
+        self.error_code = error_code
+        super().__init__(
+            f"Zoho rejected the refresh token: {error_code}"
+        )
+
+
 # 1. Exchanging Authorization Code or Tokens
 async def exchange_authorization_code(
         code: str,
@@ -79,8 +90,10 @@ async def refresh_access_token(
     if not isinstance(token_data, dict):
         raise ValueError("Zoho returned an invalid token response.")
     
-    if token_data.get("error"):
-        raise ValueError("Zoho rejected the refresh token.")
+    error_code = token_data.get("error")
+
+    if error_code:
+        raise ZohoRefreshTokenError(error_code)
     
     if not token_data.get("access_token"):
         raise ValueError("Zoho response is missing the access token.")

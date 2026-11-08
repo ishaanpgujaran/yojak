@@ -7,6 +7,7 @@ from zoho.client import (
     exchange_authorization_code,
     refresh_access_token,
     list_organizations,
+    ZohoRefreshTokenError
 )
 
 
@@ -237,11 +238,10 @@ async def test_refresh_access_token_api_error():
         )
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with pytest.raises(
-            ValueError,
-            match="Zoho rejected the refresh token",
-        ):
+        with pytest.raises(ZohoRefreshTokenError) as exc_info:
             await refresh_access_token("invalid_refresh_token")
+
+        assert exc_info.value.error_code == "invalid_code"
 
 
 @pytest.mark.asyncio

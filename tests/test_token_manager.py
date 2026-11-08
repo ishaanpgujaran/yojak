@@ -3,9 +3,11 @@ import time
 
 from uuid import uuid4
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, ANY
 
 import asyncio
+
+from zoho.client import ZohoRefreshTokenError
 
 from zoho.token_manager import (
     cache_access_token,
@@ -317,3 +319,93 @@ async def test_lock_released_after_refresh_failure(cache_key):
                 )
 
     assert not lock.locked()
+
+
+# Invalid refresh token revokes authorization
+@pytest.mark.anyio
+async def test_get_access_token_revoked_refresh_token(cache_key):
+
+    tenant_id, authorization_id = cache_key
+
+    with (
+        patch(
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
+            new_callable=AsyncMock,
+            return_value=b"encrypted_refresh_token",
+        ),
+        patch(
+            "zoho.token_manager.decrypt_refresh_token",
+            return_value="actual_refresh_token",
+        ),
+        patch(
+            "zoho.token_manager.refresh_access_token",
+            new_callable=AsyncMock,
+            side_effect=ZohoRefreshTokenError("invalid_code"),
+        ),
+        patch(
+            "zoho.token_manager.update_zoho_authorization_status",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_update_status,
+    ):
+
+        with pytest.raises(
+            ZohoRefreshTokenError,
+            match="invalid_code",
+        ):
+            await get_access_token(
+                AsyncMock(),
+                tenant_id,
+                authorization_id,
+            )
+
+        mock_update_status.assert_awaited_once_with(
+            ANY,
+            tenant_id,
+            authorization_id,
+            "revoked",
+        )
+
+    assert cache_key not in _token_cache
+
+
+# Invalid client credentials do not revoke authorization
+@pytest.mark.anyio
+async def test_get_access_token_invalid_client_does_not_revoke(cache_key):
+
+    tenant_id, authorization_id = cache_key
+
+    with (
+        patch(
+            "zoho.token_manager.get_zoho_refresh_token_for_authorization",
+            new_callable=AsyncMock,
+            return_value=b"encrypted_refresh_token",
+        ),
+        patch(
+            "zoho.token_manager.decrypt_refresh_token",
+            return_value="actual_refresh_token",
+        ),
+        patch(
+            "zoho.token_manager.refresh_access_token",
+            new_callable=AsyncMock,
+            side_effect=ZohoRefreshTokenError("invalid_client_secret"),
+        ),
+        patch(
+            "zoho.token_manager.update_zoho_authorization_status",
+            new_callable=AsyncMock,
+        ) as mock_update_status,
+    ):
+
+        with pytest.raises(
+            ZohoRefreshTokenError,
+            match="invalid_client_secret",
+        ):
+            await get_access_token(
+                AsyncMock(),
+                tenant_id,
+                authorization_id,
+            )
+
+        mock_update_status.assert_not_awaited()
+
+    assert cache_key not in _token_cache

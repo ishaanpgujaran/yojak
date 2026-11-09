@@ -17,12 +17,17 @@ from app.repositories import (
     get_active_zoho_authorization,
     create_merchant_connection,
     set_active_organization_connection,
+    get_zoho_authorization_for_tenant,
 )
 
 from zoho.auth import generate_oauth_state, build_authorization_url
-from zoho.client import exchange_authorization_code
+from zoho.client import (
+    exchange_authorization_code.
+    ZohoRefreshTokenError,
+)
 from zoho.crypto import encrypt_refresh_token
 from zoho.organizations import discover_organizations
+from zoho.token_manager import get_access_token
 
 
 
@@ -104,27 +109,86 @@ async def connect_zoho(request: Request):
         )
     
 
-    # 5. Resolve the tenant and persist OAuth state
+    # 5. Resolve the tenant 
     try:
         tenant = await get_or_create_tenant(pool, workos_user_id)
 
+        tenant_id = tenant["id"]
+
+        # Check for an existing Zoho Authorization
+        existing_authorization = await get_zoho_authorization_for_tenant(
+            pool,
+            tenant_id,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code = 500,
+            detail = "Unable to retrieve the existing Zoho authorization.",
+        )
+    
+
+    # 6. Validate and Reuse an existing active authorization
+    if (
+        existing_authorization is not None 
+        and 
+        existing_authorization["status"] == "active"
+    ):
+        try:
+            await get_access_token(
+                pool,
+                tenant_id,
+                existing_authorization["id"],
+            )
+        except ZohoRefreshTokenError as error:
+            if error.error_code != "invalid_code":
+                raise HTTPException(
+                    status_code =502,
+                    detail = "Unable to validate the existing Zoho authorization.",
+                )
+            
+            # The token manager has already marked the authorization as revoked.
+            # Continue to initiate fresh Zoho authorization.
+        
+        except Exception:
+            raise HTTPException(
+                status_code = 502,
+                detail = "Unable to validate the existing Zoho authorization.",
+            )
+    
+    else:    
+        return JSONResponse(
+            status_code = 200,
+            content = {
+                "status": "authorization_reused",
+                "provider": "zoho_inventory",
+                "message": (
+                    "An existing Zoho authorization was found. "
+                    "You can now discover your organizations."
+                ),
+                "authorization_id": str(existing_authorization["id"]),
+            },
+        )
+    
+
+    # 7. Initiate a new Zoho authorization flow
+    try:
         state = generate_oauth_state()
 
         await create_oauth_state(
             pool,
             state,
-            tenant["id"],
+            tenant_id,
         )
 
         authorization_url = build_authorization_url(state)
     except Exception:
         raise HTTPException(
             status_code = 500,
-            detail = "Unable to initiate Zoho authorization."
+            detail = "Unable to initiate Zoho authorization.",
         )
     
 
-    # 6. Redirect the user to Zoho
+    # 8. Redirect the user to Zoho
     return RedirectResponse(
         url = authorization_url,
         status_code = 302,

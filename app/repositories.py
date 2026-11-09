@@ -510,7 +510,7 @@ async def set_active_organization_connection(
     return True
 
 
-# 14. Retrieve Zoho Authorization for tenant
+# 14. Retrieve Zoho Authorization for tenant regardless of status
 async def get_zoho_authorization_for_tenant(pool, tenant_id):
     query = """
         SELECT

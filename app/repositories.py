@@ -59,40 +59,66 @@ async def get_tenant(
 async def create_zoho_authorization(
         pool: asyncpg.Pool,
         tenant_id: UUID,
-        refresh_token_encrypted: bytes,
+        refresh_token_encrypted: bytes | None,
         granted_scopes: list[str],
         status: str = "active",
-    ) -> dict[str, Any]:
-
-    if not refresh_token_encrypted:
-        raise ValueError("Encrypted refresh token cannot be empty.")
+    ) -> dict[str, Any] | None:
     
-    query = """
-        INSERT INTO zoho_authorizations (
-            tenant_id,
-            refresh_token_encrypted,
-            granted_scopes,
-            status
-        )
-        VALUES ($1, $2, $3, $4)
-
-        ON CONFLICT (tenant_id)
-        DO UPDATE SET 
-            refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
-            granted_scopes = EXCLUDED.granted_scopes,
-            status = EXCLUDED.status,
-            updated_at = NOW()
-
-        RETURNING
-            id,
-            tenant_id,
-            granted_scopes,
-            status,
-            created_at,
-            updated_at;
-    """
-
     async with pool.acquire() as connection:
+        # Case 1: No new refresh token was received
+        if refresh_token_encrypted is None:
+            query= """
+                UPDATE zoho_authorizations
+                SET 
+                    granted_scopes = $2,
+                    status = $3,
+                    updated_at = NOW()
+                WHERE tenant_id = $1
+                AND status = 'active'
+                RETURNING 
+                    id,
+                    tenant_id,
+                    granted_scopes,
+                    status,
+                    created_at,
+                    updated_at;
+            """
+
+            row = await connection.fetchrow(
+                query,
+                tenant_id,
+                granted_scopes,
+                status,
+            )
+
+            return dict(row) if row is not None else None
+        
+        # Case 2: A new refresh token was received.
+        query = """
+            INSERT INTO zoho_authorizations (
+                tenant_id,
+                refresh_token_encrypted,
+                granted_scopes,
+                status
+            )
+            VALUES ($1, $2, $3, $4)
+
+            ON CONFLICT (tenant_id)
+            DO UPDATE SET 
+                refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
+                granted_scopes = EXCLUDED.granted_scopes,
+                status = EXCLUDED.status,
+                updated_at = NOW()
+
+            RETURNING
+                id,
+                tenant_id,
+                granted_scopes,
+                status,
+                created_at,
+                updated_at;
+        """
+
         row = await connection.fetchrow(
             query,
             tenant_id,
@@ -101,7 +127,7 @@ async def create_zoho_authorization(
             status,
         )
     
-    return dict(row)
+    return dict(row) if row is not None else None
 
 
 # 4. Updating Zoho Authorization

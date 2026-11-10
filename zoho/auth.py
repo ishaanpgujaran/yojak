@@ -12,6 +12,28 @@ ZOHO_SCOPES = (
 )
 
 
+# Required Zoho OAuth scopes
+REQUIRED_ZOHO_SCOPES = frozenset(
+    scope.strip(),
+    for scope in ZOHO_SCOPES.split(",")
+    if scipe.strip()
+)
+
+
+# Scope comparision helper
+def get_missing_scopes(granted_scopes: list[str]) -> set[str]:
+
+    """Return the scopes required by Yojak that are not granted by Zoho."""
+
+    granted = {
+        scope.strip()
+        for scope in granted_scopes
+        if isinstance(scope, str) and scope.strip()
+    }
+
+    return REQUIRED_ZOHO_SCOPES - granted
+
+
 # 1. Generate a Cryptographically secure OAuth State value
 def generate_oauth_state() -> str:
     return secrets.token_urlsafe(32)

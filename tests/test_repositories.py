@@ -710,3 +710,166 @@ async def test_create_zoho_authorization_updates_existing_record():
                         tenant_id,
                     )
 
+
+@pytest.mark.asyncio
+async def test_create_zoho_authorization_without_refresh_token():
+    async with lifespan_database() as pool:
+        tenant_id = None
+
+        try:
+            tenant = await get_or_create_tenant(
+                pool,
+                "workos_user_missing_refresh_token",
+            )
+            tenant_id = tenant["id"]
+
+            result = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                None,
+                ["ZohoInventory.items.READ"],
+            )
+
+            assert result is None
+
+        finally:
+            if tenant_id is not None:
+                async with pool.acquire() as connection:
+                    await connection.execute(
+                        "DELETE FROM tenants WHERE id = $1;",
+                        tenant_id,
+                    )
+
+
+@pytest.mark.asyncio
+async def test_create_zoho_authorization_preserves_existing_token_when_none_received():
+    async with lifespan_database() as pool:
+        tenant_id = None
+
+        try:
+            tenant = await get_or_create_tenant(
+                pool,
+                "workos_user_preserve_refresh_token",
+            )
+            tenant_id = tenant["id"]
+
+            original_token = b"original_encrypted_refresh_token"
+
+            original_authorization = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                original_token,
+                ["ZohoInventory.items.READ"],
+            )
+
+            updated_scopes = [
+                "ZohoInventory.items.READ",
+                "ZohoInventory.salesorders.READ",
+                "ZohoInventory.settings.READ",
+            ]
+
+            updated_authorization = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                None,
+                updated_scopes,
+            )
+
+            assert updated_authorization is not None
+
+            # The existing authorization record must be reused.
+            assert updated_authorization["id"] == original_authorization["id"]
+
+            # The authorization must remain active.
+            assert updated_authorization["status"] == "active"
+
+            # The scopes must be updated.
+            assert updated_authorization["granted_scopes"] == updated_scopes
+
+            # The original encrypted refresh token must be preserved.
+            stored_token = await get_zoho_refresh_token_for_authorization(
+                pool,
+                tenant_id,
+                updated_authorization["id"],
+            )
+
+            assert stored_token == original_token
+
+        finally:
+            if tenant_id is not None:
+                async with pool.acquire() as connection:
+                    await connection.execute(
+                        "DELETE FROM tenants WHERE id = $1;",
+                        tenant_id,
+                    )
+
+
+
+@pytest.mark.asyncio
+async def test_create_zoho_authorization_does_not_reactivate_revoked_authorization_without_new_token():
+    async with lifespan_database() as pool:
+        tenant_id = None
+
+        try:
+            tenant = await get_or_create_tenant(
+                pool,
+                "workos_user_revoked_authorization",
+            )
+            tenant_id = tenant["id"]
+
+            original_token = b"revoked_encrypted_refresh_token"
+
+            original_authorization = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                original_token,
+                ["ZohoInventory.items.READ"],
+            )
+
+            authorization_id = original_authorization["id"]
+
+            # Simulate a revoked authorization.
+            async with pool.acquire() as connection:
+                await connection.execute(
+                    """
+                    UPDATE zoho_authorizations
+                    SET status = 'revoked'
+                    WHERE id = $1 AND tenant_id = $2;
+                    """,
+                    authorization_id,
+                    tenant_id,
+                )
+
+            result = await create_zoho_authorization(
+                pool,
+                tenant_id,
+                None,
+                ["ZohoInventory.items.READ"],
+            )
+
+            # The update must be rejected.
+            assert result is None
+
+            # The authorization must remain revoked.
+            async with pool.acquire() as connection:
+                stored_authorization = await connection.fetchrow(
+                    """
+                    SELECT id, status, refresh_token_encrypted
+                    FROM zoho_authorizations
+                    WHERE id = $1 AND tenant_id = $2;
+                    """,
+                    authorization_id,
+                    tenant_id,
+                )
+
+            assert stored_authorization is not None
+            assert stored_authorization["status"] == "revoked"
+            assert stored_authorization["refresh_token_encrypted"] == original_token
+
+        finally:
+            if tenant_id is not None:
+                async with pool.acquire() as connection:
+                    await connection.execute(
+                        "DELETE FROM tenants WHERE id = $1;",
+                        tenant_id,
+                    )

@@ -20,7 +20,11 @@ from app.repositories import (
     get_zoho_authorization_for_tenant,
 )
 
-from zoho.auth import generate_oauth_state, build_authorization_url
+from zoho.auth import (
+    generate_oauth_state, 
+    build_authorization_url,
+    get_missing_scopes,
+)
 from zoho.client import (
     exchange_authorization_code.
     ZohoRefreshTokenError,
@@ -127,48 +131,56 @@ async def connect_zoho(request: Request):
         )
     
 
-    # 6. Validate and Reuse an existing active authorization
+    # 6. Check whether an existing active authorization can be reused
     if (
         existing_authorization is not None 
         and 
         existing_authorization["status"] == "active"
     ):
-        try:
-            await get_access_token(
-                pool,
-                tenant_id,
-                existing_authorization["id"],
-            )
-        except ZohoRefreshTokenError as error:
-            if error.error_code != "invalid_code":
+        # Check whether all currently required scopes are granted
+        missing_scopes = get_missing_scopes(existing_authorization["granted_scopes"])
+
+        if not missing_scopes:
+
+            # Validate the existing authorization by obtaining an access token
+            try:
+                await get_access_token(
+                    pool,
+                    tenant_id,
+                    existing_authorization["id"],
+                )
+            except ZohoRefreshTokenError as error:
+                if error.error_code != "invalid_code":
+                    raise HTTPException(
+                        status_code =502,
+                        detail = "Unable to validate the existing Zoho authorization.",
+                    )
+                
+                # The token manager has already marked the authorization as revoked.
+                # Continue to initiate fresh Zoho authorization.
+            
+            except Exception:
                 raise HTTPException(
-                    status_code =502,
+                    status_code = 502,
                     detail = "Unable to validate the existing Zoho authorization.",
                 )
-            
-            # The token manager has already marked the authorization as revoked.
-            # Continue to initiate fresh Zoho authorization.
         
-        except Exception:
-            raise HTTPException(
-                status_code = 502,
-                detail = "Unable to validate the existing Zoho authorization.",
-            )
-    
-    else:    
-        return JSONResponse(
-            status_code = 200,
-            content = {
-                "status": "authorization_reused",
-                "provider": "zoho_inventory",
-                "message": (
-                    "An existing Zoho authorization was found. "
-                    "You can now discover your organizations."
-                ),
-                "authorization_id": str(existing_authorization["id"]),
-            },
-        )
-    
+            else:    
+                return JSONResponse(
+                    status_code = 200,
+                    content = {
+                        "status": "authorization_reused",
+                        "provider": "zoho_inventory",
+                        "message": (
+                            "An existing Zoho authorization was found. "
+                            "You can now discover your organizations."
+                        ),
+                        "authorization_id": str(existing_authorization["id"]),
+                    },
+                )
+
+        # If scopes are missing, continue to initiate fresh OAuth authorization
+        
 
     # 7. Initiate a new Zoho authorization flow
     try:
@@ -266,7 +278,13 @@ async def zoho_callback(
 
     # 7. Encrypt the refresh token
     try:
-        encrypted_refresh_token = encrypt_refresh_token(token_data["refresh_token"])
+        refresh_token = token_data.get("refresh_token")
+
+        encrypted_refresh_token = (
+            encrypt_refresh_token(refresh_token)
+            if isinstance(refresh_token, str) and refresh_token.strip()
+            else None
+        )
     except Exception:
         raise HTTPException(
             status_code = 500,

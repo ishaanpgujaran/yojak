@@ -1,0 +1,41 @@
+1. What happens on Reconnection - Same Authorization persist and update if needed 
+Zoho Authorization Reconnect Lifecycle 
+- One active Zoho authorization per tenant.
+- Reconnecting Zoho without leaving existing organization connections attached to stale authorization records.
+- Correct handling of invalid or revoked refresh tokens.
+
+
+
+Reconnection 2 Cases : 
+
+1. User reconnects through different client or session expiry -> Use Retrieve Existing Authorization without any Update
+
+2. User needs Zoho reconnect due to refresh expiry, Zoho auth not valid, need additional scopes, explicit Zoho auth again -> Reauth using Zoho Consent but preserve Auth ID
+
+Implemenation: 
+| 1 | Enforce one Zoho authorization per tenant | (DONE)
+| 2 | Implement create-or-update authorization behaviour | (DONE)
+| 3 | Fix existing merchant connection authorization references |
+	Not Needed instead Updated set_active_Conn to deactivate & activate
+	So in mid of Zoho Reconnection we sarted changing set_activ_conn as it was needed
+	It had multiple things to change
+		Lock the tenant row.
+		Verify the requested connection belongs to the tenant and has an active authorization.
+		Retrieve the tenant's currently active connection, excluding the requested connection.
+		If one exists, mark it inactive.
+		Mark the requested connection active.
+		Update the tenant's active connection pointer.
+		Commit the transaction.
+		Adding inactive status
+		Partial Constraint of only one active connection per tenant
+		
+| 4 | Handle invalid/revoked refresh tokens |
+| 5 | Adapt `/oauth/zoho/connect` to reuse existing authorization |
+| 6 | Handle missing scopes and reauthorization |
+| 7 | Add tests for both reconnection scenarios |
+
+
+
+
+
+2. What happens when Zoho Auth becomes Invalid - Refresh error comes but also we need to update authorization status 

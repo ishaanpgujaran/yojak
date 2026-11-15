@@ -26,7 +26,7 @@ from zoho.auth import (
     get_missing_scopes,
 )
 from zoho.client import (
-    exchange_authorization_code.
+    exchange_authorization_code,
     ZohoRefreshTokenError,
 )
 from zoho.crypto import encrypt_refresh_token

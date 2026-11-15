@@ -14,9 +14,9 @@ ZOHO_SCOPES = (
 
 # Required Zoho OAuth scopes
 REQUIRED_ZOHO_SCOPES = frozenset(
-    scope.strip(),
+    scope.strip()
     for scope in ZOHO_SCOPES.split(",")
-    if scipe.strip()
+    if scope.strip()
 )
 
 

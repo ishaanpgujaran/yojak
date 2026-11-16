@@ -43,7 +43,18 @@ def mock_tenant_resolution(monkeypatch):
     )
 
 
-def mock_existing_authorization(monkeypatch, status):
+def mock_existing_authorization(
+    monkeypatch,
+    status,
+    granted_scopes=None,
+):
+    if granted_scopes is None:
+        granted_scopes = [
+            "ZohoInventory.items.READ",
+            "ZohoInventory.salesorders.READ",
+            "ZohoInventory.settings.READ",
+        ]
+
     monkeypatch.setattr(
         main,
         "get_zoho_authorization_for_tenant",
@@ -51,11 +62,7 @@ def mock_existing_authorization(monkeypatch, status):
             return_value={
                 "id": "authorization-test-123",
                 "tenant_id": "tenant-test-123",
-                "granted_scopes": [
-                    "ZohoInventory.items.READ",
-                    "ZohoInventory.salesorders.READ",
-                    "ZohoInventory.settings.READ",
-                ],
+                "granted_scopes": granted_scopes,
                 "status": status,
             }
         ),
@@ -95,6 +102,16 @@ def test_connect_zoho_reuses_active_authorization(
     mock_tenant_resolution(monkeypatch)
     mock_existing_authorization(monkeypatch, "active")
 
+    mock_get_access_token = AsyncMock(
+        return_value="test-access-token"
+    )
+
+    monkeypatch.setattr(
+        main,
+        "get_access_token",
+        mock_get_access_token,
+    )
+
     mock_create_state = AsyncMock()
 
     monkeypatch.setattr(
@@ -117,6 +134,12 @@ def test_connect_zoho_reuses_active_authorization(
     assert data["status"] == "authorization_reused"
     assert data["provider"] == "zoho_inventory"
     assert data["authorization_id"] == "authorization-test-123"
+
+    mock_get_access_token.assert_awaited_once_with(
+        main.runtime.database_pool,
+        "tenant-test-123",
+        "authorization-test-123",
+    )
 
     # Existing authorization should not initiate new OAuth state
     mock_create_state.assert_not_awaited()
@@ -282,3 +305,152 @@ def test_connect_zoho_rejects_invalid_workos_token(
     assert response.json()["detail"] == (
         "Invalid or Expired access token."
     )
+
+
+
+# ---------------------------------------------------------
+# Test 8: Start OAuth when required scopes are missing
+# ---------------------------------------------------------
+
+def test_connect_zoho_starts_oauth_when_scopes_are_missing(
+    client,
+    monkeypatch,
+):
+    mock_tenant_resolution(monkeypatch)
+
+    mock_existing_authorization(
+        monkeypatch,
+        "active",
+        granted_scopes=[
+            "ZohoInventory.items.READ",
+            "ZohoInventory.salesorders.READ",
+        ],
+    )
+
+    mock_oauth_initiation(monkeypatch)
+
+    mock_get_access_token = AsyncMock()
+
+    monkeypatch.setattr(
+        main,
+        "get_access_token",
+        mock_get_access_token,
+    )
+
+    response = client.get(
+        "/oauth/zoho/connect",
+        headers={
+            "Authorization": "Bearer test-workos-token"
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+
+    assert response.headers["location"] == (
+        "https://accounts.zoho.com/oauth/v2/auth"
+        "?state=test-oauth-state"
+    )
+
+    main.create_oauth_state.assert_awaited_once()
+
+    # Token validation should not happen when scopes are missing
+    mock_get_access_token.assert_not_awaited()
+
+
+# ---------------------------------------------------------
+# Test 9: Start OAuth when the existing refresh token is invalid
+# ---------------------------------------------------------
+
+def test_connect_zoho_starts_oauth_for_invalid_refresh_token(
+    client,
+    monkeypatch,
+):
+    mock_tenant_resolution(monkeypatch)
+    mock_existing_authorization(monkeypatch, "active")
+    mock_oauth_initiation(monkeypatch)
+
+    mock_get_access_token = AsyncMock(
+        side_effect=main.ZohoRefreshTokenError(
+            error_code = "invalid_code"
+        )
+    )
+
+    monkeypatch.setattr(
+        main,
+        "get_access_token",
+        mock_get_access_token,
+    )
+
+    response = client.get(
+        "/oauth/zoho/connect",
+        headers={
+            "Authorization": "Bearer test-workos-token"
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+
+    assert response.headers["location"] == (
+        "https://accounts.zoho.com/oauth/v2/auth"
+        "?state=test-oauth-state"
+    )
+
+    mock_get_access_token.assert_awaited_once_with(
+        main.runtime.database_pool,
+        "tenant-test-123",
+        "authorization-test-123",
+    )
+
+    main.create_oauth_state.assert_awaited_once()
+
+
+# ---------------------------------------------------------
+# Test 10: Do not initiate OAuth for other refresh token errors
+# ---------------------------------------------------------
+
+def test_connect_zoho_returns_error_for_non_revocation_refresh_failure(
+    client,
+    monkeypatch,
+):
+    mock_tenant_resolution(monkeypatch)
+    mock_existing_authorization(monkeypatch, "active")
+
+    mock_create_state = AsyncMock()
+
+    monkeypatch.setattr(
+        main,
+        "create_oauth_state",
+        mock_create_state,
+    )
+
+    mock_get_access_token = AsyncMock(
+        side_effect=main.ZohoRefreshTokenError(
+            error_code = "invalid_client_secret"
+            
+        )
+    )
+
+    monkeypatch.setattr(
+        main,
+        "get_access_token",
+        mock_get_access_token,
+    )
+
+    response = client.get(
+        "/oauth/zoho/connect",
+        headers={
+            "Authorization": "Bearer test-workos-token"
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 502
+
+    assert response.json()["detail"] == (
+        "Unable to validate the existing Zoho authorization."
+    )
+
+    # No new OAuth state should be created
+    mock_create_state.assert_not_awaited()

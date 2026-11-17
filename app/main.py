@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 
@@ -9,6 +11,7 @@ from yojak_mcp.server import mcp, workos_auth
 
 from app import runtime
 from app.dependencies import get_authenticated_tenant_context
+from app.database_errors import DATABASE_AVAILABILITY_ERRORS
 from app.repositories import (
     get_or_create_tenant, 
     create_oauth_state,
@@ -34,6 +37,7 @@ from zoho.organizations import discover_organizations
 from zoho.token_manager import get_access_token
 
 
+logger = logging.getLogger(__name__)
 
 
 # MCP Server HTTP Application
@@ -56,12 +60,75 @@ class ZohoOrganizationSelection(BaseModel):
     organization_id: str = Field(min_length = 1)
 
 
+# Registering Exception Handler
+async def database_availability_exception_handler(
+        request: Request,
+        exc: Exception,
+    ):
+
+    logger.error(
+        "Database availability failure during request: %s",
+        request.url.path,
+        exc_info = (type(exc), exc, exc.__traceback__),
+    )
+
+    return JSONResponse(
+        status_code = 503,
+        content = {
+            "status": "service_unavailable",
+            "message": "Database service is temporarily unavailable. Please try again later.",
+        },
+    )
+
+# FastAPI exception-handler registration expects an exception class, so using loop to register individual classes
+for exception_class in DATABASE_AVAILABILITY_ERRORS:
+    app.add_exception_handler(
+        exception_class,
+        database_availability_exception_handler,
+    )
+
+
 # Health Check Endpoint
 @app.get("/")
 def health_check():
     return {
         "status" : "OK",
         "application" : "Yojak",
+    }
+
+
+# Database Readiness Endpoint
+@app.get("/health/ready")
+async def readiness_check():
+
+    pool = runtime.database_pool
+
+    if pool is None:
+        return JSONResponse(
+            status_code = 503,
+            content = {
+                "status": "not_ready",
+                "database": "unavailable",
+            },
+        )
+    
+    try:
+        async with pool.acquire() as connection:
+            await connection.fetchval("SELECT 1")
+    except Exception:
+        logger.exception("Database readiness check failed.")
+
+        return JSONResponse(
+            status_code = 503,
+            content = {
+                "status": "not_ready",
+                "database": "unavailable",
+            },
+        )
+
+    return {
+        "status": "ready",
+        "database": "connected", 
     }
 
 
@@ -124,6 +191,11 @@ async def connect_zoho(request: Request):
             pool,
             tenant_id,
         )
+    
+    # Re-raise known database availability exceptions before the generic exception handler.
+    except DATABASE_AVAILABILITY_ERRORS:
+        raise
+
     except Exception:
         raise HTTPException(
             status_code = 500,
@@ -159,6 +231,10 @@ async def connect_zoho(request: Request):
                 # The token manager has already marked the authorization as revoked.
                 # Continue to initiate fresh Zoho authorization.
             
+            # Re-raise known database availability exceptions before the generic exception handler.
+            except DATABASE_AVAILABILITY_ERRORS:
+                raise
+
             except Exception:
                 raise HTTPException(
                     status_code = 502,
@@ -193,6 +269,11 @@ async def connect_zoho(request: Request):
         )
 
         authorization_url = build_authorization_url(state)
+    
+    # Re-raise known database availability exceptions before the generic exception handler.
+    except DATABASE_AVAILABILITY_ERRORS:
+        raise
+
     except Exception:
         raise HTTPException(
             status_code = 500,
@@ -237,6 +318,11 @@ async def zoho_callback(
     # 3. Validate and Consume OAuth state
     try:
         tenant_id = await consume_oauth_state(pool, state)
+    
+    # Re-raise known database availability exceptions before the generic exception handler.
+    except DATABASE_AVAILABILITY_ERRORS:
+        raise
+
     except Exception:
         raise HTTPException(
             status_code = 500,
@@ -316,10 +402,21 @@ async def zoho_callback(
             refresh_token_encrypted = encrypted_refresh_token,
             granted_scopes = granted_scopes,
         )
+    
+    # Re-raise known database availability exceptions before the generic exception handler.
+    except DATABASE_AVAILABILITY_ERRORS:
+        raise
+
     except Exception:
         raise HTTPException(
             status_code = 500,
             detail = "Unable to save the Zoho Authorization.",
+        )
+    
+    if authorization is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to save the Zoho Authorization.",
         )
     
 

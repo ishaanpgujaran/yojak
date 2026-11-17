@@ -101,7 +101,10 @@ def setup_endpoint_mocks(monkeypatch):
 @pytest.fixture
 async def client():
 
-    transport = httpx.ASGITransport(app=main.app)
+    transport = httpx.ASGITransport(
+        app=main.app,
+        raise_app_exceptions=False,
+    )
 
     async with httpx.AsyncClient(
         transport=transport,
@@ -441,3 +444,155 @@ async def test_select_organization_without_token(client):
     )
 
     assert response.status_code == 401
+
+
+
+# ---------------------------------------------------------
+# Additional failure-path tests
+# ---------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_discover_organizations_handles_discovery_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    main.discover_organizations.side_effect = RuntimeError(
+        "Zoho organization discovery failed"
+    )
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 500
+
+    main.create_merchant_connection.assert_not_called()
+    main.set_active_organization_connection.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_discover_single_organization_handles_connection_creation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    main.discover_organizations.return_value = [
+        {
+            "organization_id": "org-001",
+            "name": "ABC Technologies",
+        }
+    ]
+
+    main.create_merchant_connection.side_effect = RuntimeError(
+        "Merchant connection creation failed"
+    )
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 500
+
+    main.create_merchant_connection.assert_awaited_once()
+    main.set_active_organization_connection.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_discover_single_organization_handles_activation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    main.discover_organizations.return_value = [
+        {
+            "organization_id": "org-001",
+            "name": "ABC Technologies",
+        }
+    ]
+
+    main.set_active_organization_connection.return_value = False
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to set the active Zoho organization."
+    )
+
+    main.create_merchant_connection.assert_awaited_once()
+    main.set_active_organization_connection.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+        CONNECTION_ID,
+    )
+
+
+@pytest.mark.anyio
+async def test_select_organization_handles_discovery_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    main.discover_organizations.side_effect = RuntimeError(
+        "Zoho organization discovery failed"
+    )
+
+    response = await client.post(
+        "/oauth/zoho/organizations/select",
+        headers=auth_headers,
+        json={
+            "organization_id": "org-001",
+        },
+    )
+
+    assert response.status_code == 500
+
+    main.create_merchant_connection.assert_not_called()
+    main.set_active_organization_connection.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_select_organization_handles_activation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    main.discover_organizations.return_value = [
+        {
+            "organization_id": "org-001",
+            "name": "ABC Technologies",
+        }
+    ]
+
+    main.set_active_organization_connection.return_value = False
+
+    response = await client.post(
+        "/oauth/zoho/organizations/select",
+        headers=auth_headers,
+        json={
+            "organization_id": "org-001",
+        },
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to set the active Zoho organization."
+    )
+
+    main.create_merchant_connection.assert_awaited_once()
+    main.set_active_organization_connection.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+        CONNECTION_ID,
+    )

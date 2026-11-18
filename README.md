@@ -1,53 +1,56 @@
 # Yojak — Zoho Inventory MCP Connector
 
-**Yojak** is an MCP-powered connector designed to securely connect AI agents with merchant data stored in Zoho Inventory.
+**Yojak** is an MCP-powered connector that enables AI agents to securely access merchant data stored in Zoho Inventory.
 
-It acts as a bridge between MCP-compatible AI clients and the Zoho Inventory API, enabling AI agents to access business information through structured, well-defined tools.
+It acts as a bridge between MCP-compatible AI clients and the Zoho Inventory API, providing a standardized interface for authentication, organization access, and inventory operations.
 
-The project focuses on secure authentication, tenant isolation, reliable API communication, and a modular architecture that can support additional Zoho Inventory capabilities.
+The project focuses on secure authentication, tenant isolation, reliable API communication, and a modular connector architecture.
 
-> **Project Status:** Under active development.
+> **Project Status:** Core authentication and organization-connection implementation completed. Live end-to-end verification is in progress. Read-only inventory MCP tools are the next development milestone.
+
+---
 
 ## Overview
 
-Businesses manage important operational data in inventory management systems such as Zoho Inventory. However, making this information accessible to AI agents requires a secure and standardized integration layer.
+Businesses manage important operational data in inventory management systems such as Zoho Inventory. Making this information accessible to AI agents requires a secure integration layer that handles authentication, authorization, and communication with the underlying platform.
 
-Yojak addresses this by providing an MCP server that handles authentication, organization access, and communication with Zoho Inventory.
+Yojak provides this integration through the Model Context Protocol (MCP).
 
-The intended outcome is to allow AI agents to interact with merchant inventory data through MCP tools without requiring them to understand the underlying Zoho API implementation.
+The intended outcome is to allow AI agents to access merchant inventory information through structured tools without needing to understand the underlying Zoho API implementation.
 
 ## Architecture
 
 ```text
-                  AI Client
-                      |
-                      | MCP Protocol
-                      |
-                Yojak MCP Server
-                      |
-              Authentication Layer
-                 (WorkOS)
-                      |
-                Tenant Resolution
-                      |
-              Zoho Connector Layer
-             /        |         \
-          OAuth    Token       API Client
-                  Management
-                      |
-               Zoho Inventory API
-                      |
-                Merchant Data
+                       AI Client
+                           |
+                           | MCP Protocol
+                           |
+                    Yojak MCP Server
+                           |
+                  Authentication Layer
+                       (WorkOS)
+                           |
+                    Tenant Resolution
+                           |
+                   Zoho Connector Layer
+                  /          |          \
+               OAuth       Token       API Client
+                          Management
+                           |
+                    Zoho Inventory API
+                           |
+                     Merchant Data
 ```
 
 ### Core Components
 
 - **MCP Server:** Exposes Zoho Inventory capabilities through structured MCP tools using FastMCP.
 - **Authentication:** Uses WorkOS AuthKit to authenticate MCP clients.
-- **Tenant Isolation:** Associates authenticated users with their respective Yojak tenants and ensures merchant data remains isolated.
-- **Zoho OAuth:** Handles authorization and securely manages Zoho refresh tokens.
+- **Tenant Isolation:** Associates authenticated users with their respective Yojak tenants.
+- **Zoho OAuth:** Handles authorization, callback validation, and secure refresh-token storage.
 - **Token Management:** Handles access-token retrieval, caching, expiry, and refresh.
-- **Database Layer:** Uses PostgreSQL to persist tenant information, Zoho authorizations, merchant connections, and OAuth states.
+- **Organization Management:** Discovers Zoho organizations and manages the tenant's active organization connection.
+- **Database Layer:** Uses PostgreSQL to persist tenants, Zoho authorizations, merchant connections, and OAuth states.
 
 ## Tech Stack
 
@@ -72,42 +75,65 @@ The following components have been implemented:
 - [x] MCP server using FastMCP.
 - [x] WorkOS AuthKit integration.
 - [x] Authenticated tenant identification.
-- [x] PostgreSQL database integration.
-- [x] Database schema and migrations.
-- [x] Zoho OAuth authorization flow.
-- [x] OAuth state generation, storage, and validation.
+- [x] PostgreSQL database integration and migrations.
+- [x] Tenant-isolated Zoho authorization records.
+- [x] Zoho OAuth authorization initiation and callback handling.
+- [x] Cryptographically secure OAuth state generation, storage, and validation.
 - [x] Secure refresh-token encryption.
-- [x] Access-token refresh and caching.
-- [x] Zoho organization discovery.
+- [x] Access-token refresh, caching, and concurrency control.
+- [x] Handling of invalid and revoked refresh tokens.
 - [x] OAuth scope validation and reauthorization handling.
-- [x] Repository-level tests for tenant and authorization operations.
+- [x] Reuse and preservation of existing Zoho authorizations.
+- [x] Zoho organization discovery.
+- [x] Merchant organization connection creation and reuse.
+- [x] Organization selection and active-connection switching.
+- [x] Database constraints enforcing tenant ownership and a single active organization connection.
+- [x] Automated tests for authentication, database operations, OAuth, token management, and organization endpoints.
+- [x] Database availability error handling and readiness checks.
 
-## Planned Features
+## Organization Connection Management
 
-The following capabilities are part of the development roadmap:
+A Yojak tenant can authorize one Zoho account and access the organizations available through that authorization.
 
-- [ ] Complete end-to-end OAuth verification.
-- [ ] Complete Zoho organization selection and connection management.
-- [ ] Implement read-only inventory MCP tools.
-- [ ] Support inventory item retrieval and search.
-- [ ] Support sales order retrieval and search.
-- [ ] Implement pagination and robust API error handling.
-- [ ] Add comprehensive integration tests.
-- [ ] Verify end-to-end functionality through MCP clients.
-- [ ] Prepare deployment and documentation.
+Yojak maintains a separate merchant connection for each accessible Zoho organization.
 
-### Initial MCP Tools
+The organization management implementation supports:
 
-The initial release is planned to expose read-only tools such as:
+- Discovering organizations accessible through the authorized Zoho account.
+- Automatically activating an organization when only one is available.
+- Returning the available organizations when multiple organizations are found.
+- Validating a selected organization against Zoho's actual organization list.
+- Creating or reusing the corresponding merchant connection.
+- Switching the active organization while preserving previous connections.
+- Ensuring that only one organization connection is active per tenant.
 
-| Tool | Description |
+Merchant connection statuses:
+
+| Status | Meaning |
 |---|---|
-| `list_items` | Retrieve inventory items from Zoho Inventory. |
-| `get_item` | Retrieve details of a specific inventory item. |
-| `list_sales_orders` | Retrieve sales orders from the selected organization. |
-| `get_sales_order` | Retrieve details of a specific sales order. |
+| `pending` | Connection setup has started but is not yet complete. |
+| `active` | Currently selected organization. |
+| `inactive` | Previously connected successfully but no longer selected. |
+| `revoked` | Connection or authorization has been revoked. |
+| `error` | Connection encountered an error. |
 
-These tools are planned and are not yet implemented.
+The database enforces tenant ownership through foreign keys and constraints. A partial unique index ensures that a tenant cannot have more than one active organization connection.
+
+**Implementation status:** Completed. Live end-to-end verification remains pending.
+
+## Initial MCP Tools
+
+The initial inventory integration is planned around read-only operations.
+
+| Tool | Description | Status |
+|---|---|---|
+| `yojak_status` | Returns the current application status. | Implemented |
+| `list_items` | Retrieves inventory items from Zoho Inventory. | Planned |
+| `get_item` | Retrieves details of a specific inventory item. | Planned |
+| `list_sales_orders` | Retrieves sales orders from Zoho Inventory. | Planned |
+| `get_sales_order` | Retrieves details of a specific sales order. | Planned |
+
+The inventory tools have not yet been implemented.
 
 ## Database Design
 
@@ -130,8 +156,10 @@ Security is a core consideration in Yojak's architecture.
 - OAuth state validation protects the authorization callback flow.
 - Zoho refresh tokens are encrypted before database storage.
 - Merchant connections are associated with their owning tenant.
-- Active organization connections are constrained to belong to the same tenant.
+- Composite foreign keys enforce tenant ownership across related records.
+- Only one active organization connection is permitted per tenant.
 - The initial inventory integration is designed around read-only access.
+- Sensitive credentials and tokens must never be committed to version control.
 
 ## Project Structure
 
@@ -141,6 +169,7 @@ yojak/
 │   ├── config.py
 │   ├── main.py
 │   ├── database.py
+│   ├── database_errors.py
 │   ├── repositories.py
 │   ├── runtime.py
 │   └── dependencies.py
@@ -161,6 +190,10 @@ yojak/
 ├── tests/
 │   └── automated tests
 │
+├── docs/
+│   ├── zoho-oauth-lifecycle.md
+│   └── end-to-end-testing.md
+│
 ├── .env.example
 ├── requirements.txt
 └── README.md
@@ -171,7 +204,7 @@ yojak/
 ### Prerequisites
 
 - Python 3.12+
-- A Zoho Inventory account and OAuth application.
+- A Zoho Inventory account and configured OAuth application.
 - A WorkOS AuthKit application.
 - A Supabase PostgreSQL database.
 
@@ -201,14 +234,14 @@ pip install -r requirements.txt
 
 Create a `.env` file using `.env.example` as a reference.
 
-Configure the required environment variables:
+Configure the following environment variables:
 
 ```env
 ZOHO_CLIENT_ID=
 ZOHO_CLIENT_SECRET=
-ZOHO_REDIRECT_URI=
-ZOHO_ACCOUNTS_URL=
-ZOHO_API_BASE_URL=
+ZOHO_REDIRECT_URI=http://localhost:8000/oauth/zoho/callback
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.in
+ZOHO_API_BASE_URL=https://www.zohoapis.in/inventory/v1
 
 DATABASE_URL=
 
@@ -221,23 +254,71 @@ Use the appropriate values for your Zoho OAuth application, WorkOS configuration
 
 **Important:** Never commit `.env` files, OAuth credentials, access tokens, refresh tokens, or encryption keys to version control.
 
-## Testing
+### Running the Application
 
-Run the test suite using:
+Start the application locally:
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+Check application health:
+
+```bash
+curl http://localhost:8000/
+```
+
+Check database readiness:
+
+```bash
+curl http://localhost:8000/health/ready
+```
+
+### Running Tests
+
+Run the automated test suite:
 
 ```bash
 pytest -v
 ```
 
-Tests cover database operations, tenant isolation, OAuth state handling, token encryption, Zoho API communication, token management, and authorization-related repository operations.
+The tests cover database operations, tenant isolation, OAuth state handling, token encryption, Zoho API communication, token management, and authorization-related application behaviour.
+
+## End-to-End Verification
+
+The live integration verification covers:
+
+1. WorkOS authentication through an MCP client.
+2. Zoho OAuth authorization and callback handling.
+3. Secure refresh-token persistence.
+4. Zoho access-token retrieval and refresh.
+5. Organization discovery.
+6. Organization selection and active-connection switching.
+7. Database persistence and tenant isolation.
+
+A repeatable verification procedure is maintained in [`docs/end-to-end-testing.md`](docs/end-to-end-testing.md).
+
+**Current status:** Pending live verification against Zoho Inventory and WorkOS.
+
+## Development Roadmap
+
+The next development milestones are:
+
+- [ ] Complete live end-to-end verification of WorkOS authentication and Zoho OAuth.
+- [ ] Verify organization discovery and multi-organization selection.
+- [ ] Verify active organization switching and persistence.
+- [ ] Implement read-only inventory MCP tools.
+- [ ] Implement pagination and robust Zoho API error handling.
+- [ ] Verify inventory operations through MCP clients.
+- [ ] Prepare deployment and operational documentation.
 
 ## Current Scope
 
 Yojak is currently focused on establishing a secure foundation for connecting AI agents with Zoho Inventory.
 
-The initial implementation prioritizes authentication, authorization, organization management, and read-only inventory access.
+The implementation prioritizes authentication, tenant isolation, authorization lifecycle management, and merchant organization connections before introducing inventory operations.
 
-Additional capabilities can be introduced incrementally as the connector evolves.
+Additional capabilities will be introduced incrementally.
 
 ## Author
 

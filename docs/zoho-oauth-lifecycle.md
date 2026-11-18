@@ -343,135 +343,218 @@ This prevents a revoked authorization from being reactivated without a new refre
 
 ---
 
-## 7. Remaining Work — OAuth Regression Tests
+## 7. OAuth Regression Testing
 
-The core implementation described above has been completed.
+The core OAuth implementation and its automated regression coverage have been completed.
 
-However, individual unit and repository tests do not necessarily prove that the complete reconnection lifecycle works correctly.
+The test suite includes coverage for:
 
-We must verify both reconnection scenarios through appropriate application-level tests.
+- Existing authorization reuse.
+- OAuth state creation, validation, and single-use consumption.
+- Authorization code exchange and refresh-token handling.
+- Refresh-token encryption and decryption.
+- Access-token caching and concurrency control.
+- Invalid and revoked refresh-token handling.
+- Temporary Zoho failures and authorization status preservation.
+- Missing OAuth scopes and reauthorization behaviour.
+- Authorization persistence and identity preservation.
+- Database availability failures.
+- Organization discovery and selection.
+- Merchant connection creation, reuse, and active-connection switching.
 
-### 7.1 Scenario 1 — Reuse Existing Authorization
-
-The following cases need to be verified:
-
-- [ ] Active authorization with all required scopes is reused.
-- [ ] Existing valid cached access token is reused without an unnecessary Zoho refresh.
-- [ ] Expired or unavailable cached access token is refreshed through Zoho.
-- [ ] Missing required scopes trigger a new consent flow.
-- [ ] Temporary Zoho failures do not mark authorization as revoked.
-- [ ] Invalid client credentials do not mark authorization as revoked.
-- [ ] Definitively invalid refresh tokens mark authorization as revoked and trigger fresh consent.
-
-### 7.2 Scenario 2 — Reauthorize Through Zoho Consent
-
-The following cases need to be verified:
-
-- [ ] Reauthorization updates the existing authorization record.
-- [ ] Existing authorization ID is preserved.
-- [ ] A new refresh token replaces the previously encrypted token.
-- [ ] An omitted refresh token preserves an existing active authorization's token.
-- [ ] An omitted refresh token does not reactivate a revoked authorization.
-- [ ] Existing merchant connections continue referencing the same authorization ID.
-- [ ] Granted scopes are updated correctly.
-- [ ] Callback processing fails safely when authorization persistence cannot be completed.
-
-### 7.3 Test Coverage Review
-
-Before adding tests, inspect the existing coverage in:
+Relevant test modules include:
 
 - `tests/test_zoho_client.py`
 - `tests/test_token_manager.py`
 - `tests/test_repositories.py`
 - `tests/test_main.py`
+- `tests/test_zoho_organization_endpoints.py`
+- `tests/test_database_errors.py`
 
-Identify which scenarios are already covered and add only the missing tests.
+Run the complete test suite using:
 
-Avoid duplicating existing tests that already verify the intended behaviour.
+```bash
+pytest -v
+```
 
-**Status:** Pending.
+These tests primarily verify application behaviour using controlled dependencies and mocks. They must not be treated as proof of a successful live integration with WorkOS, Zoho Inventory, and Supabase.
 
----
-
-## 8. End-to-End OAuth Verification
-
-After the regression tests pass, verify the actual Zoho OAuth flow.
-
-### 8.1 Initial Authorization
-
-- [ ] Start the Zoho connection flow.
-- [ ] Authenticate through WorkOS.
-- [ ] Redirect the user to Zoho consent.
-- [ ] Complete Zoho authorization.
-- [ ] Validate the OAuth callback and state.
-- [ ] Exchange the authorization code for tokens.
-- [ ] Encrypt and persist the refresh token.
-- [ ] Verify the authorization record in PostgreSQL.
-
-### 8.2 Token Management
-
-- [ ] Obtain an access token using the stored refresh token.
-- [ ] Verify access-token caching.
-- [ ] Verify access-token refresh after expiry.
-- [ ] Verify correct handling of invalid refresh tokens.
-- [ ] Verify that temporary failures preserve authorization status.
-
-### 8.3 Reconnection
-
-- [ ] Verify that an existing valid authorization is reused.
-- [ ] Verify that a revoked authorization initiates fresh consent.
-- [ ] Verify that reauthorization preserves the authorization ID.
-- [ ] Verify that existing organization connections remain associated with the authorization.
-
-### 8.4 Organization Discovery
-
-- [ ] Retrieve Zoho organizations using the authenticated authorization.
-- [ ] Verify that the returned organization information is correct.
-- [ ] Verify that organization discovery is restricted to the authenticated tenant's authorization.
-
-**Status:** Pending end-to-end verification.
+**Status:** Automated regression coverage implemented. Live end-to-end verification remains pending.
 
 ---
 
-## 9. Current Progress Summary
+## 8. Zoho Organization Discovery and Connection Management
+
+The organization discovery and selection implementation has been completed.
+
+### 8.1 Organization Discovery
+
+The endpoint:
+
+```http
+GET /oauth/zoho/organizations
+```
+
+uses the authenticated tenant's active Zoho authorization to retrieve organizations from Zoho Inventory.
+
+It supports the following outcomes:
+
+| Scenario | Expected behaviour |
+|---|---|
+| No active Zoho authorization | Return HTTP 404 |
+| No accessible organizations | Return `no_organizations_found` |
+| One accessible organization | Create or reuse its connection and activate it |
+| Multiple accessible organizations | Return `selection_required` and the available organizations |
+
+### 8.2 Organization Selection
+
+The endpoint:
+
+```http
+POST /oauth/zoho/organizations/select
+```
+
+accepts an organization ID and verifies that the organization is accessible through the current Zoho authorization.
+
+The endpoint then creates or reuses the merchant connection and activates it.
+
+The organization ID supplied by the caller is never trusted without verification against Zoho's organization list.
+
+### 8.3 Active Organization Switching
+
+The repository function `set_active_organization_connection()` manages active organization switching transactionally.
+
+When a different organization is selected:
+
+1. Lock the tenant row.
+2. Verify that the selected connection belongs to the tenant.
+3. Verify that its linked authorization is active.
+4. Mark the previously active connection as `inactive`.
+5. Mark the selected connection as `active`.
+6. Update the tenant's active organization pointer.
+7. Commit the transaction.
+
+The database's partial unique index ensures that a tenant cannot have more than one active merchant connection.
+
+Existing connections are reused when an organization is selected again.
+
+**Status:** Implementation and automated endpoint coverage completed. Live multi-organization verification remains pending.
+
+---
+
+## 9. Live End-to-End Verification
+
+Automated tests are necessary but do not establish that the complete integration works with the actual external services.
+
+The next verification milestone covers the following:
+
+### 9.1 WorkOS Authentication
+
+- [ ] Start the local Yojak application.
+- [ ] Verify application health and database readiness.
+- [ ] Authenticate through WorkOS using an MCP client.
+- [ ] Invoke `yojak_status` successfully.
+- [ ] Verify authenticated access to the protected REST endpoints.
+
+### 9.2 Zoho OAuth
+
+- [ ] Initiate Zoho authorization.
+- [ ] Complete the real Zoho consent flow.
+- [ ] Verify callback state validation and consumption.
+- [ ] Verify authorization code exchange.
+- [ ] Verify refresh-token encryption and persistence.
+- [ ] Verify access-token retrieval through the token manager.
+- [ ] Verify existing authorization reuse when applicable.
+
+### 9.3 Multiple-Organization Discovery
+
+The current test Zoho account contains two organizations:
+
+| Organization | Organization ID |
+|---|---|
+| Ishaan Demo Store | `60090589249` |
+| Ishaan Demo Store 2 | `60096804481` |
+
+The live test must verify that both organizations are returned by Zoho's organization discovery API through the same authorization.
+
+Expected behaviour:
+
+- [ ] Both organizations are discovered.
+- [ ] The response indicates that organization selection is required.
+- [ ] Neither organization is automatically activated by the multiple-organization discovery branch.
+
+### 9.4 Organization Selection and Switching
+
+- [ ] Select Ishaan Demo Store.
+- [ ] Verify that its connection becomes active.
+- [ ] Select Ishaan Demo Store 2.
+- [ ] Verify that the second connection becomes active.
+- [ ] Verify that the first connection becomes inactive.
+- [ ] Select Ishaan Demo Store again.
+- [ ] Verify that the existing connection is reused.
+- [ ] Verify that the active connection pointer is updated correctly.
+- [ ] Verify that an inaccessible organization ID is rejected.
+
+### 9.5 Database Verification
+
+- [ ] Verify that both organization connections belong to the same tenant.
+- [ ] Verify that both connections reference the same Zoho authorization.
+- [ ] Verify that exactly one merchant connection is active.
+- [ ] Verify that the tenant's active connection pointer references that active connection.
+- [ ] Verify that the refresh token is not exposed through application responses or logs.
+
+**Status:** Pending live end-to-end verification.
+
+The repeatable test procedure is documented in [`end-to-end-testing.md`](end-to-end-testing.md).
+
+---
+
+## 10. Next Development Milestone
+
+Once live verification of WorkOS authentication, Zoho OAuth, and organization connection management is complete, development will move to the initial read-only inventory MCP tools.
+
+| Tool | Responsibility |
+|---|---|
+| `list_items` | Retrieve inventory items from the selected Zoho organization. |
+| `get_item` | Retrieve details of a specific inventory item. |
+| `list_sales_orders` | Retrieve sales orders from the selected Zoho organization. |
+| `get_sales_order` | Retrieve details of a specific sales order. |
+
+The implementation will build on the existing authentication, tenant resolution, token management, and organization connection architecture.
+
+Additional capabilities will include pagination, API error handling, and appropriate response normalization.
+
+The initial inventory integration will remain read-only.
+
+---
+
+## 11. Current Progress Summary
 
 | Area | Status |
 |---|---|
-| One Zoho authorization per tenant | Completed |
-| Authorization create-or-update behaviour | Completed |
-| Authorization ID preservation | Completed |
-| Merchant connection authorization references | Completed |
-| Organization connection switching | Completed |
-| Inactive connection status | Completed |
-| One active organization connection per tenant | Completed |
-| Invalid/revoked refresh-token handling | Completed |
-| Temporary failure classification | Completed |
-| Access-token cache invalidation | Completed |
-| Existing authorization reuse | Completed |
-| Missing-scope detection | Completed |
-| Reauthorization flow | Completed |
-| Refresh-token preservation | Completed |
-| Regression tests for both reconnection scenarios | Pending |
-| End-to-end Zoho OAuth verification | Pending |
+| One Zoho authorization per tenant | Implemented |
+| Authorization create-or-update behaviour | Implemented |
+| Authorization ID preservation | Implemented |
+| Merchant connection authorization references | Implemented |
+| Organization connection switching | Implemented |
+| Inactive connection status | Implemented |
+| One active organization connection per tenant | Implemented |
+| Invalid/revoked refresh-token handling | Implemented |
+| Temporary failure classification | Implemented |
+| Access-token cache invalidation | Implemented |
+| Existing authorization reuse | Implemented |
+| Missing-scope detection | Implemented |
+| Reauthorization flow | Implemented |
+| Refresh-token preservation | Implemented |
+| Automated OAuth regression coverage | Implemented |
+| Automated organization endpoint coverage | Implemented |
+| Live WorkOS authentication verification | Pending |
+| Live Zoho OAuth verification | Pending |
+| Live token-management verification | Pending |
+| Live organization discovery verification | Pending |
+| Live multi-organization selection and switching | Pending |
+| Initial read-only inventory MCP tools | Planned |
 
 ---
 
-## 10. Agreed Development Sequence
-
-We will follow this sequence before moving to inventory MCP tools:
-
-1. Review existing OAuth test coverage.
-2. Identify missing reconnection test cases.
-3. Implement only the missing regression tests.
-4. Run the complete test suite.
-5. Resolve any failures.
-6. Perform end-to-end Zoho OAuth verification.
-7. Verify organization discovery and connection management.
-
-Once these stages are complete, we can proceed to the next major milestone:
-
-**Zoho Organization Selection and Merchant Connection Management**, followed by the implementation of read-only inventory MCP tools.
-
----
-
-*This document is the working reference for Yojak's Zoho OAuth lifecycle implementation and verification.*
+*This document tracks the implementation and verification status of Yojak's Zoho OAuth lifecycle and merchant organization connection management.*

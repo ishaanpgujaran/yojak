@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import main
+from app.services import zoho_oauth
 
 
 @pytest.fixture
@@ -58,7 +59,7 @@ def mock_existing_authorization(
         ]
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_zoho_authorization_for_tenant",
         AsyncMock(
             return_value={
@@ -73,19 +74,19 @@ def mock_existing_authorization(
 
 def mock_oauth_initiation(monkeypatch):
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "generate_oauth_state",
         lambda: "test-oauth-state",
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_oauth_state",
         AsyncMock(return_value=None),
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "build_authorization_url",
         lambda state: (
             f"https://accounts.zoho.com/oauth/v2/auth?state={state}"
@@ -180,7 +181,7 @@ def test_connect_zoho_starts_oauth_without_existing_authorization(
         "?state=test-oauth-state"
     )
 
-    main.create_oauth_state.assert_awaited_once_with(
+    zoho_oauth.create_oauth_state.assert_awaited_once_with(
         main.runtime.database_pool,
         "test-oauth-state",
         "tenant-test-123",
@@ -214,7 +215,7 @@ def test_connect_zoho_starts_oauth_for_revoked_authorization(
         "?state=test-oauth-state"
     )
 
-    main.create_oauth_state.assert_awaited_once()
+    zoho_oauth.create_oauth_state.assert_awaited_once()
 
 
 # ---------------------------------------------------------
@@ -239,7 +240,7 @@ def test_connect_zoho_starts_oauth_for_error_authorization(
 
     assert response.status_code == 302
 
-    main.create_oauth_state.assert_awaited_once()
+    zoho_oauth.create_oauth_state.assert_awaited_once()
 
 
 # ---------------------------------------------------------
@@ -264,7 +265,7 @@ def test_connect_zoho_starts_oauth_for_pending_authorization(
 
     assert response.status_code == 302
 
-    main.create_oauth_state.assert_awaited_once()
+    zoho_oauth.create_oauth_state.assert_awaited_once()
 
 
 # ---------------------------------------------------------
@@ -354,7 +355,7 @@ def test_connect_zoho_starts_oauth_when_scopes_are_missing(
         "?state=test-oauth-state"
     )
 
-    main.create_oauth_state.assert_awaited_once()
+    zoho_oauth.create_oauth_state.assert_awaited_once()
 
     # Token validation should not happen when scopes are missing
     mock_get_access_token.assert_not_awaited()
@@ -373,7 +374,7 @@ def test_connect_zoho_starts_oauth_for_invalid_refresh_token(
     mock_oauth_initiation(monkeypatch)
 
     mock_get_access_token = AsyncMock(
-        side_effect=main.ZohoRefreshTokenError(
+        side_effect=zoho_oauth.ZohoRefreshTokenError(
             error_code = "invalid_code"
         )
     )
@@ -405,7 +406,7 @@ def test_connect_zoho_starts_oauth_for_invalid_refresh_token(
         "authorization-test-123",
     )
 
-    main.create_oauth_state.assert_awaited_once()
+    zoho_oauth.create_oauth_state.assert_awaited_once()
 
 
 # ---------------------------------------------------------
@@ -428,7 +429,7 @@ def test_connect_zoho_returns_error_for_non_revocation_refresh_failure(
     )
 
     mock_get_access_token = AsyncMock(
-        side_effect=main.ZohoRefreshTokenError(
+        side_effect=zoho_oauth.ZohoRefreshTokenError(
             error_code = "invalid_client_secret"
             
         )

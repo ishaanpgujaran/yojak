@@ -110,7 +110,7 @@ def test_connect_zoho_reuses_active_authorization(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_access_token",
         mock_get_access_token,
     )
@@ -118,7 +118,7 @@ def test_connect_zoho_reuses_active_authorization(
     mock_create_state = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_oauth_state",
         mock_create_state,
     )
@@ -159,7 +159,7 @@ def test_connect_zoho_starts_oauth_without_existing_authorization(
     mock_tenant_resolution(monkeypatch)
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_zoho_authorization_for_tenant",
         AsyncMock(return_value=None),
     )
@@ -335,7 +335,7 @@ def test_connect_zoho_starts_oauth_when_scopes_are_missing(
     mock_get_access_token = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_access_token",
         mock_get_access_token,
     )
@@ -380,7 +380,7 @@ def test_connect_zoho_starts_oauth_for_invalid_refresh_token(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_access_token",
         mock_get_access_token,
     )
@@ -423,7 +423,7 @@ def test_connect_zoho_returns_error_for_non_revocation_refresh_failure(
     mock_create_state = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_oauth_state",
         mock_create_state,
     )
@@ -436,7 +436,7 @@ def test_connect_zoho_returns_error_for_non_revocation_refresh_failure(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_access_token",
         mock_get_access_token,
     )
@@ -472,7 +472,7 @@ def test_zoho_callback_rejects_missing_state(client, monkeypatch):
     mock_consume_state = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
@@ -498,13 +498,13 @@ def test_zoho_callback_rejects_invalid_state(client, monkeypatch):
     mock_exchange_code = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
@@ -543,13 +543,13 @@ def test_zoho_callback_handles_state_validation_failure(
     mock_exchange_code = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
@@ -590,13 +590,13 @@ def test_zoho_callback_handles_authorization_denial(
     mock_exchange_code = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
@@ -637,13 +637,13 @@ def test_zoho_callback_rejects_missing_authorization_code(
     mock_exchange_code = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
@@ -682,13 +682,13 @@ def test_zoho_callback_handles_token_exchange_failure(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
@@ -739,7 +739,7 @@ def test_zoho_callback_successfully_persists_authorization(
     mock_encrypt_token = lambda token: b"encrypted-refresh-token"
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "encrypt_refresh_token",
         mock_encrypt_token,
     )
@@ -758,19 +758,19 @@ def test_zoho_callback_successfully_persists_authorization(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_zoho_authorization",
         mock_create_authorization,
     )
@@ -837,25 +837,25 @@ def test_zoho_callback_rejects_invalid_scope_format(
     mock_create_authorization = AsyncMock()
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "encrypt_refresh_token",
         lambda token: b"encrypted-refresh-token",
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_zoho_authorization",
         mock_create_authorization,
     )
@@ -910,25 +910,25 @@ def test_zoho_callback_reauthorization_preserves_authorization_id(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "encrypt_refresh_token",
         lambda token: b"encrypted-new-refresh-token",
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_zoho_authorization",
         mock_create_authorization,
     )
@@ -988,25 +988,25 @@ def test_zoho_callback_handles_failed_authorization_persistence(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "encrypt_refresh_token",
         lambda token: b"encrypted-refresh-token",
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_zoho_authorization",
         mock_create_authorization,
     )
@@ -1049,7 +1049,7 @@ def test_connect_zoho_returns_503_when_authorization_retrieval_fails(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_zoho_authorization_for_tenant",
         mock_get_authorization,
     )
@@ -1089,7 +1089,7 @@ def test_connect_zoho_returns_503_when_access_token_validation_fails(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_access_token",
         mock_get_access_token,
     )
@@ -1120,7 +1120,7 @@ def test_connect_zoho_returns_503_when_oauth_state_creation_fails(
     mock_tenant_resolution(monkeypatch)
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "get_zoho_authorization_for_tenant",
         AsyncMock(return_value=None),
     )
@@ -1132,13 +1132,13 @@ def test_connect_zoho_returns_503_when_oauth_state_creation_fails(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "generate_oauth_state",
         lambda: "test-oauth-state",
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_oauth_state",
         mock_create_state,
     )
@@ -1173,7 +1173,7 @@ def test_zoho_callback_returns_503_when_state_consumption_fails(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
@@ -1223,25 +1223,25 @@ def test_zoho_callback_returns_503_when_authorization_persistence_fails(
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "consume_oauth_state",
         mock_consume_state,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "exchange_authorization_code",
         mock_exchange_code,
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "encrypt_refresh_token",
         lambda token: b"encrypted-refresh-token",
     )
 
     monkeypatch.setattr(
-        main,
+        zoho_oauth,
         "create_zoho_authorization",
         mock_create_authorization,
     )

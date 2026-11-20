@@ -184,12 +184,6 @@ async def connect_zoho(request: Request):
 
         tenant_id = tenant["id"]
 
-        # Check for an existing Zoho Authorization
-        existing_authorization = await get_zoho_authorization_for_tenant(
-            pool,
-            tenant_id,
-        )
-    
     # Re-raise known database availability exceptions before the generic exception handler.
     except DATABASE_AVAILABILITY_ERRORS:
         raise

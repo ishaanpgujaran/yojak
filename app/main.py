@@ -14,24 +14,25 @@ from app.dependencies import get_authenticated_tenant_context
 from app.database_errors import DATABASE_AVAILABILITY_ERRORS
 from app.repositories import (
     get_or_create_tenant, 
-    consume_oauth_state,
-    create_zoho_authorization,
     get_active_zoho_authorization,
     create_merchant_connection,
     set_active_organization_connection,
 )
 from app.services.zoho_oauth import (
     connect_zoho_service,
+    handle_zoho_callback_service,
     ZohoAuthorizationLookupError,
     ZohoAuthorizationValidationError,
     ZohoOAuthInitiationError,
+    ZohoOAuthStateValidationError,
+    ZohoOAuthStateInvalidError,
+    ZohoAuthorizationDeniedError,
+    ZohoAuthorizationCodeMissingError,
+    ZohoAuthorizationCodeExchangeError,
+    ZohoRefreshTokenEncryptionError,
+    ZohoInvalidScopeFormatError,
+    ZohoAuthorizationPersistenceError,
 )
-
-from zoho.client import (
-    exchange_authorization_code,
-    ZohoRefreshTokenError,
-)
-from zoho.crypto import encrypt_refresh_token
 from zoho.organizations import discover_organizations
 
 
@@ -248,142 +249,94 @@ async def zoho_callback(
         state: str | None = None,
         error: str | None = None,
     ):
-    
 
-    # 1. Validate the OAuth state parameter
+    # 1. Validate the OAuth state parameter.
     if not state or not state.strip():
         raise HTTPException(
-            status_code = 400,
-            detail = "OAuth state is missing.",
+            status_code=400,
+            detail="OAuth state is missing.",
         )
-    
 
-    # 2. Obtain the existing database pool
+    # 2. Obtain the existing database pool.
     pool = runtime.database_pool
 
     if pool is None:
         raise HTTPException(
-            status_code = 503,
-            detail = "Database connection is unavailable.",
+            status_code=503,
+            detail="Database connection is unavailable.",
         )
-    
 
-    # 3. Validate and Consume OAuth state
+    # 3. Delegate callback processing to the shared service.
     try:
-        tenant_id = await consume_oauth_state(pool, state)
-    
-    # Re-raise known database availability exceptions before the generic exception handler.
+        result = await handle_zoho_callback_service(
+            pool,
+            code,
+            state,
+            error,
+        )
+
     except DATABASE_AVAILABILITY_ERRORS:
         raise
 
-    except Exception:
+    except ZohoOAuthStateValidationError:
         raise HTTPException(
-            status_code = 500,
-            detail = "Unable to validate OAuth state.",
+            status_code=500,
+            detail="Unable to validate OAuth state.",
         )
-    
-    if tenant_id is None:
+
+    except ZohoOAuthStateInvalidError:
         raise HTTPException(
-            status_code = 400,
-            detail = "OAuth state is invalid, expired, or already used.",
+            status_code=400,
+            detail="OAuth state is invalid, expired, or already used.",
         )
-    
-    
-    # 4. Handle authorization denial or other OAuth errors
-    if error:
+
+    except ZohoAuthorizationDeniedError:
         raise HTTPException(
-            status_code = 400,
-            detail = "Zoho authorization was denied or failed.",
+            status_code=400,
+            detail="Zoho authorization was denied or failed.",
         )
 
-
-    # 5. Validate the authorization code
-    if not code or not code.strip():
+    except ZohoAuthorizationCodeMissingError:
         raise HTTPException(
-            status_code = 400,
-            detail = "Authorization code is missing.",
+            status_code=400,
+            detail="Authorization code is missing.",
         )
 
-
-    # 6. Exchange authorization code for tokens
-    try: 
-        token_data = await exchange_authorization_code(code)
-    except Exception:
+    except ZohoAuthorizationCodeExchangeError:
         raise HTTPException(
-            status_code = 502,
-            detail = "Unable to exchange the Zoho authorization code.",
+            status_code=502,
+            detail="Unable to exchange the Zoho authorization code.",
         )
-    
 
-    # 7. Encrypt the refresh token
-    try:
-        refresh_token = token_data.get("refresh_token")
-
-        encrypted_refresh_token = (
-            encrypt_refresh_token(refresh_token)
-            if isinstance(refresh_token, str) and refresh_token.strip()
-            else None
-        )
-    except Exception:
+    except ZohoRefreshTokenEncryptionError:
         raise HTTPException(
-            status_code = 500,
-            detail = "Unable to securely store the Zoho authorization",
+            status_code=500,
+            detail="Unable to securely store the Zoho authorization",
         )
-    
 
-    # 8. Parse granted scopes
-    scopes_value = token_data.get("scope", "")
-
-    if isinstance(scopes_value, str):
-        granted_scopes = [
-            scope.strip() for scope in scopes_value.split(",") if scope.strip()
-        ]
-    elif isinstance(scopes_value, list):
-        granted_scopes = scopes_value
-    else:
+    except ZohoInvalidScopeFormatError:
         raise HTTPException(
-            status_code = 502,
-            detail = "Zoho returned an invalid scope format.",
+            status_code=502,
+            detail="Zoho returned an invalid scope format.",
         )
-    
 
-    # 9. Persist the authorization
-    try:
-        authorization = await create_zoho_authorization(
-            pool = pool,
-            tenant_id = tenant_id,
-            refresh_token_encrypted = encrypted_refresh_token,
-            granted_scopes = granted_scopes,
-        )
-    
-    # Re-raise known database availability exceptions before the generic exception handler.
-    except DATABASE_AVAILABILITY_ERRORS:
-        raise
-
-    except Exception:
-        raise HTTPException(
-            status_code = 500,
-            detail = "Unable to save the Zoho Authorization.",
-        )
-    
-    if authorization is None:
+    except ZohoAuthorizationPersistenceError:
         raise HTTPException(
             status_code=500,
             detail="Unable to save the Zoho Authorization.",
         )
-    
 
-    # 10. Return a safe success response
+    # 4. Translate the service result into an HTTP response.
     return JSONResponse(
-        status_code = 200,
-        content = {
+        status_code=200,
+        content={
             "status": "connected",
             "provider": "zoho_inventory",
             "message": (
                 "Zoho authorization completed successfully."
                 "You can now discover your organizations."
             ),
-            "authorization_id": str(authorization["id"]),
+            "authorization_id": result["authorization_id"],
         },
     )
 

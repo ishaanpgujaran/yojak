@@ -5,13 +5,11 @@ import pytest
 import httpx
 
 import app.main as main
+import app.services.zoho_organizations as zoho_organizations
 
 
 TENANT_ID = uuid4()
-AUTHORIZATION_ID = uuid4()
 CONNECTION_ID = uuid4()
-
-WORKOS_USER_ID = "test_workos_user_001"
 
 WORKOS_TOKEN = "test-workos-access-token"
 
@@ -23,15 +21,28 @@ WORKOS_TOKEN = "test-workos-access-token"
 
 @pytest.fixture
 def setup_endpoint_mocks(monkeypatch):
+    """
+    Prepare the dependencies required by the organization
+    endpoints.
 
-    # Mock the database connection pool
+    The endpoint tests now mock the shared service functions,
+    rather than mocking repositories and Zoho API functions
+    directly.
+
+    This keeps these tests focused on:
+    - HTTP request/response behaviour
+    - Authentication dependency behaviour
+    - Correct translation of service errors into HTTP errors
+    """
+
+    # Mock the shared database connection pool.
     monkeypatch.setattr(
         main.runtime,
         "database_pool",
         object(),
     )
 
-    # Mock authenticated tenant context
+    # Mock the authenticated tenant context.
     async def mock_authenticated_tenant_context():
         return {
             "pool": main.runtime.database_pool,
@@ -42,56 +53,23 @@ def setup_endpoint_mocks(monkeypatch):
         main.get_authenticated_tenant_context
     ] = mock_authenticated_tenant_context
 
-    # Mock active Zoho authorization lookup
+    # Mock the organization discovery service.
     monkeypatch.setattr(
         main,
-        "get_active_zoho_authorization",
-        AsyncMock(
-            return_value={
-                "id": AUTHORIZATION_ID,
-                "tenant_id": TENANT_ID,
-                "status": "active",
-                "granted_scopes": [
-                    "ZohoInventory.items.READ",
-                    "ZohoInventory.salesorders.READ",
-                ],
-            }
-        ),
-    )
-
-    # Mock organization discovery
-    monkeypatch.setattr(
-        main,
-        "discover_organizations",
+        "get_zoho_organizations_service",
         AsyncMock(),
     )
 
-    # Mock merchant connection creation
+    # Mock the organization selection service.
     monkeypatch.setattr(
         main,
-        "create_merchant_connection",
-        AsyncMock(
-            return_value={
-                "id": CONNECTION_ID,
-                "tenant_id": TENANT_ID,
-                "provider": "zoho_inventory",
-                "zoho_organization_id": "org-001",
-                "authorization_id": AUTHORIZATION_ID,
-                "status": "active",
-            }
-        ),
-    )
-
-    # Mock active organization selection
-    monkeypatch.setattr(
-        main,
-        "set_active_organization_connection",
-        AsyncMock(return_value=True),
+        "select_zoho_organization_service",
+        AsyncMock(),
     )
 
     yield
 
-    # Remove dependency override after the test
+    # Remove the dependency override after each test.
     main.app.dependency_overrides.pop(
         main.get_authenticated_tenant_context,
         None,
@@ -122,6 +100,7 @@ def auth_headers():
 
 # ---------------------------------------------------------
 # GET /oauth/zoho/organizations
+# Organization discovery endpoint
 # ---------------------------------------------------------
 
 
@@ -131,8 +110,16 @@ async def test_discover_zero_organizations(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    When Zoho returns no organizations, the endpoint should
+    return a successful response indicating that no
+    organizations were found.
+    """
 
-    main.discover_organizations.return_value = []
+    main.get_zoho_organizations_service.return_value = {
+        "status": "no_organizations_found",
+        "selection_required": False,
+    }
 
     response = await client.get(
         "/oauth/zoho/organizations",
@@ -146,8 +133,10 @@ async def test_discover_zero_organizations(
     assert data["status"] == "no_organizations_found"
     assert data["selection_required"] is False
 
-    main.create_merchant_connection.assert_not_called()
-    main.set_active_organization_connection.assert_not_called()
+    main.get_zoho_organizations_service.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+    )
 
 
 @pytest.mark.anyio
@@ -156,13 +145,22 @@ async def test_discover_single_organization(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    When exactly one organization is available, the service
+    should connect it automatically.
 
-    main.discover_organizations.return_value = [
-        {
+    The endpoint should return the connection details.
+    """
+
+    main.get_zoho_organizations_service.return_value = {
+        "status": "connected",
+        "selection_required": False,
+        "connection": {
+            "id": str(CONNECTION_ID),
             "organization_id": "org-001",
-            "name": "ABC Technologies",
-        }
-    ]
+            "organization_name": "ABC Technologies",
+        },
+    }
 
     response = await client.get(
         "/oauth/zoho/organizations",
@@ -180,28 +178,9 @@ async def test_discover_single_organization(
     assert data["connection"]["organization_id"] == "org-001"
     assert data["connection"]["organization_name"] == "ABC Technologies"
 
-    main.get_active_zoho_authorization.assert_awaited_once_with(
+    main.get_zoho_organizations_service.assert_awaited_once_with(
         main.runtime.database_pool,
         TENANT_ID,
-    )
-
-    main.discover_organizations.assert_awaited_once_with(
-        main.runtime.database_pool,
-        TENANT_ID,
-        AUTHORIZATION_ID,
-    )
-
-    main.create_merchant_connection.assert_awaited_once_with(
-        main.runtime.database_pool,
-        TENANT_ID,
-        AUTHORIZATION_ID,
-        "org-001",
-    )
-
-    main.set_active_organization_connection.assert_awaited_once_with(
-        main.runtime.database_pool,
-        TENANT_ID,
-        CONNECTION_ID,
     )
 
 
@@ -211,17 +190,27 @@ async def test_discover_multiple_organizations(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    When multiple organizations are available, the service
+    should return them for the user to select.
 
-    main.discover_organizations.return_value = [
-        {
-            "organization_id": "org-001",
-            "name": "ABC Technologies",
-        },
-        {
-            "organization_id": "org-002",
-            "name": "ABC Retail",
-        },
-    ]
+    No organization should be automatically selected here.
+    """
+
+    main.get_zoho_organizations_service.return_value = {
+        "status": "selection_required",
+        "selection_required": True,
+        "organizations": [
+            {
+                "organization_id": "org-001",
+                "name": "ABC Technologies",
+            },
+            {
+                "organization_id": "org-002",
+                "name": "ABC Retail",
+            },
+        ],
+    }
 
     response = await client.get(
         "/oauth/zoho/organizations",
@@ -243,9 +232,10 @@ async def test_discover_multiple_organizations(
     assert data["organizations"][1]["organization_id"] == "org-002"
     assert data["organizations"][1]["name"] == "ABC Retail"
 
-    # No connection should be created before user selection
-    main.create_merchant_connection.assert_not_called()
-    main.set_active_organization_connection.assert_not_called()
+    main.get_zoho_organizations_service.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+    )
 
 
 @pytest.mark.anyio
@@ -254,8 +244,14 @@ async def test_discover_organizations_without_authorization(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    If the tenant has no active Zoho authorization, the
+    endpoint should return HTTP 404.
+    """
 
-    main.get_active_zoho_authorization.return_value = None
+    main.get_zoho_organizations_service.side_effect = (
+        zoho_organizations.ZohoActiveAuthorizationNotFoundError()
+    )
 
     response = await client.get(
         "/oauth/zoho/organizations",
@@ -269,12 +265,99 @@ async def test_discover_organizations_without_authorization(
         == "No active Zoho authorization found. Connect Zoho first."
     )
 
-    main.discover_organizations.assert_not_called()
-    main.create_merchant_connection.assert_not_called()
+    main.get_zoho_organizations_service.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+    )
+
+
+@pytest.mark.anyio
+async def test_discover_organizations_handles_discovery_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    """
+    A Zoho organization discovery failure should be translated
+    into a safe HTTP 500 response.
+    """
+
+    main.get_zoho_organizations_service.side_effect = (
+        zoho_organizations.ZohoOrganizationDiscoveryError()
+    )
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to discover Zoho organizations."
+    )
+
+
+@pytest.mark.anyio
+async def test_discover_single_organization_handles_connection_creation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    """
+    If automatic connection creation fails for a single
+    organization, the endpoint should return HTTP 500.
+    """
+
+    main.get_zoho_organizations_service.side_effect = (
+        zoho_organizations.ZohoOrganizationConnectionCreationError()
+    )
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to create the Zoho organization connection."
+    )
+
+
+@pytest.mark.anyio
+async def test_discover_single_organization_handles_activation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    """
+    If the connection is created but cannot be activated,
+    the endpoint should return HTTP 500.
+    """
+
+    main.get_zoho_organizations_service.side_effect = (
+        zoho_organizations.ZohoOrganizationActivationError()
+    )
+
+    response = await client.get(
+        "/oauth/zoho/organizations",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to set the active Zoho organization."
+    )
 
 
 # ---------------------------------------------------------
 # POST /oauth/zoho/organizations/select
+# Organization selection endpoint
 # ---------------------------------------------------------
 
 
@@ -284,25 +367,18 @@ async def test_select_valid_organization(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    A valid organization selection should return the
+    successfully activated connection.
+    """
 
-    main.discover_organizations.return_value = [
-        {
-            "organization_id": "org-001",
-            "name": "ABC Technologies",
-        },
-        {
+    main.select_zoho_organization_service.return_value = {
+        "status": "connected",
+        "connection": {
+            "id": str(CONNECTION_ID),
             "organization_id": "org-002",
-            "name": "ABC Retail",
+            "organization_name": "ABC Retail",
         },
-    ]
-
-    main.create_merchant_connection.return_value = {
-        "id": CONNECTION_ID,
-        "tenant_id": TENANT_ID,
-        "provider": "zoho_inventory",
-        "zoho_organization_id": "org-002",
-        "authorization_id": AUTHORIZATION_ID,
-        "status": "active",
     }
 
     response = await client.post(
@@ -323,17 +399,10 @@ async def test_select_valid_organization(
     assert data["connection"]["organization_id"] == "org-002"
     assert data["connection"]["organization_name"] == "ABC Retail"
 
-    main.create_merchant_connection.assert_awaited_once_with(
+    main.select_zoho_organization_service.assert_awaited_once_with(
         main.runtime.database_pool,
         TENANT_ID,
-        AUTHORIZATION_ID,
         "org-002",
-    )
-
-    main.set_active_organization_connection.assert_awaited_once_with(
-        main.runtime.database_pool,
-        TENANT_ID,
-        CONNECTION_ID,
     )
 
 
@@ -343,13 +412,14 @@ async def test_select_inaccessible_organization(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    An organization that is not accessible through the
+    current Zoho authorization must not be connected.
+    """
 
-    main.discover_organizations.return_value = [
-        {
-            "organization_id": "org-001",
-            "name": "ABC Technologies",
-        }
-    ]
+    main.select_zoho_organization_service.side_effect = (
+        zoho_organizations.ZohoOrganizationNotAccessibleError()
+    )
 
     response = await client.post(
         "/oauth/zoho/organizations/select",
@@ -366,9 +436,11 @@ async def test_select_inaccessible_organization(
         == "The selected organization is not accessible through this Zoho authorization."
     )
 
-    # Inaccessible organization must never be connected
-    main.create_merchant_connection.assert_not_called()
-    main.set_active_organization_connection.assert_not_called()
+    main.select_zoho_organization_service.assert_awaited_once_with(
+        main.runtime.database_pool,
+        TENANT_ID,
+        "org-999",
+    )
 
 
 @pytest.mark.anyio
@@ -377,8 +449,14 @@ async def test_select_organization_without_authorization(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    Organization selection must fail if the tenant does not
+    have an active Zoho authorization.
+    """
 
-    main.get_active_zoho_authorization.return_value = None
+    main.select_zoho_organization_service.side_effect = (
+        zoho_organizations.ZohoActiveAuthorizationNotFoundError()
+    )
 
     response = await client.post(
         "/oauth/zoho/organizations/select",
@@ -390,8 +468,10 @@ async def test_select_organization_without_authorization(
 
     assert response.status_code == 404
 
-    main.discover_organizations.assert_not_called()
-    main.create_merchant_connection.assert_not_called()
+    assert (
+        response.json()["detail"]
+        == "No active Zoho authorization found. Connect Zoho first."
+    )
 
 
 @pytest.mark.anyio
@@ -400,6 +480,12 @@ async def test_select_organization_without_selection(
     auth_headers,
     setup_endpoint_mocks,
 ):
+    """
+    FastAPI request validation should reject a request that
+    does not include the required organization_id field.
+
+    The service must not be called.
+    """
 
     response = await client.post(
         "/oauth/zoho/organizations/select",
@@ -409,7 +495,100 @@ async def test_select_organization_without_selection(
 
     assert response.status_code == 422
 
-    main.create_merchant_connection.assert_not_called()
+    main.select_zoho_organization_service.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_select_organization_handles_discovery_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    """
+    If the service cannot discover the organizations while
+    validating the requested selection, return HTTP 500.
+    """
+
+    main.select_zoho_organization_service.side_effect = (
+        zoho_organizations.ZohoOrganizationDiscoveryError()
+    )
+
+    response = await client.post(
+        "/oauth/zoho/organizations/select",
+        headers=auth_headers,
+        json={
+            "organization_id": "org-001",
+        },
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to discover Zoho organizations."
+    )
+
+
+@pytest.mark.anyio
+async def test_select_organization_handles_connection_creation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    """
+    If the selected organization cannot be saved as a
+    merchant connection, return HTTP 500.
+    """
+
+    main.select_zoho_organization_service.side_effect = (
+        zoho_organizations.ZohoOrganizationConnectionCreationError()
+    )
+
+    response = await client.post(
+        "/oauth/zoho/organizations/select",
+        headers=auth_headers,
+        json={
+            "organization_id": "org-001",
+        },
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to create the Zoho organization connection."
+    )
+
+
+@pytest.mark.anyio
+async def test_select_organization_handles_activation_failure(
+    client,
+    auth_headers,
+    setup_endpoint_mocks,
+):
+    """
+    If the selected connection cannot be activated,
+    return HTTP 500.
+    """
+
+    main.select_zoho_organization_service.side_effect = (
+        zoho_organizations.ZohoOrganizationActivationError()
+    )
+
+    response = await client.post(
+        "/oauth/zoho/organizations/select",
+        headers=auth_headers,
+        json={
+            "organization_id": "org-001",
+        },
+    )
+
+    assert response.status_code == 500
+
+    assert (
+        response.json()["detail"]
+        == "Unable to set the active Zoho organization."
+    )
 
 
 # ---------------------------------------------------------
@@ -419,9 +598,9 @@ async def test_select_organization_without_selection(
 
 @pytest.mark.anyio
 async def test_discover_organizations_without_token(client):
-
-    # No dependency override here.
-    # The actual authentication dependency must reject this request.
+    """
+    Requests without a WorkOS bearer token must be rejected.
+    """
 
     response = await client.get(
         "/oauth/zoho/organizations",
@@ -432,9 +611,9 @@ async def test_discover_organizations_without_token(client):
 
 @pytest.mark.anyio
 async def test_select_organization_without_token(client):
-
-    # No dependency override here.
-    # The actual authentication dependency must reject this request.
+    """
+    Organization selection must also require authentication.
+    """
 
     response = await client.post(
         "/oauth/zoho/organizations/select",
@@ -444,155 +623,3 @@ async def test_select_organization_without_token(client):
     )
 
     assert response.status_code == 401
-
-
-
-# ---------------------------------------------------------
-# Additional failure-path tests
-# ---------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_discover_organizations_handles_discovery_failure(
-    client,
-    auth_headers,
-    setup_endpoint_mocks,
-):
-    main.discover_organizations.side_effect = RuntimeError(
-        "Zoho organization discovery failed"
-    )
-
-    response = await client.get(
-        "/oauth/zoho/organizations",
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 500
-
-    main.create_merchant_connection.assert_not_called()
-    main.set_active_organization_connection.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_discover_single_organization_handles_connection_creation_failure(
-    client,
-    auth_headers,
-    setup_endpoint_mocks,
-):
-    main.discover_organizations.return_value = [
-        {
-            "organization_id": "org-001",
-            "name": "ABC Technologies",
-        }
-    ]
-
-    main.create_merchant_connection.side_effect = RuntimeError(
-        "Merchant connection creation failed"
-    )
-
-    response = await client.get(
-        "/oauth/zoho/organizations",
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 500
-
-    main.create_merchant_connection.assert_awaited_once()
-    main.set_active_organization_connection.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_discover_single_organization_handles_activation_failure(
-    client,
-    auth_headers,
-    setup_endpoint_mocks,
-):
-    main.discover_organizations.return_value = [
-        {
-            "organization_id": "org-001",
-            "name": "ABC Technologies",
-        }
-    ]
-
-    main.set_active_organization_connection.return_value = False
-
-    response = await client.get(
-        "/oauth/zoho/organizations",
-        headers=auth_headers,
-    )
-
-    assert response.status_code == 500
-
-    assert (
-        response.json()["detail"]
-        == "Unable to set the active Zoho organization."
-    )
-
-    main.create_merchant_connection.assert_awaited_once()
-    main.set_active_organization_connection.assert_awaited_once_with(
-        main.runtime.database_pool,
-        TENANT_ID,
-        CONNECTION_ID,
-    )
-
-
-@pytest.mark.anyio
-async def test_select_organization_handles_discovery_failure(
-    client,
-    auth_headers,
-    setup_endpoint_mocks,
-):
-    main.discover_organizations.side_effect = RuntimeError(
-        "Zoho organization discovery failed"
-    )
-
-    response = await client.post(
-        "/oauth/zoho/organizations/select",
-        headers=auth_headers,
-        json={
-            "organization_id": "org-001",
-        },
-    )
-
-    assert response.status_code == 500
-
-    main.create_merchant_connection.assert_not_called()
-    main.set_active_organization_connection.assert_not_called()
-
-
-@pytest.mark.anyio
-async def test_select_organization_handles_activation_failure(
-    client,
-    auth_headers,
-    setup_endpoint_mocks,
-):
-    main.discover_organizations.return_value = [
-        {
-            "organization_id": "org-001",
-            "name": "ABC Technologies",
-        }
-    ]
-
-    main.set_active_organization_connection.return_value = False
-
-    response = await client.post(
-        "/oauth/zoho/organizations/select",
-        headers=auth_headers,
-        json={
-            "organization_id": "org-001",
-        },
-    )
-
-    assert response.status_code == 500
-
-    assert (
-        response.json()["detail"]
-        == "Unable to set the active Zoho organization."
-    )
-
-    main.create_merchant_connection.assert_awaited_once()
-    main.set_active_organization_connection.assert_awaited_once_with(
-        main.runtime.database_pool,
-        TENANT_ID,
-        CONNECTION_ID,
-    )

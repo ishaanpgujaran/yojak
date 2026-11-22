@@ -33,6 +33,15 @@ from app.services.zoho_oauth import (
     ZohoInvalidScopeFormatError,
     ZohoAuthorizationPersistenceError,
 )
+from app.services.zoho_organizations import (
+    get_zoho_organizations_service,
+    select_zoho_organization_service,
+    ZohoActiveAuthorizationNotFoundError,
+    ZohoOrganizationDiscoveryError,
+    ZohoOrganizationConnectionCreationError,
+    ZohoOrganizationActivationError,
+    ZohoOrganizationNotAccessibleError,
+)
 from zoho.organizations import discover_organizations
 
 
@@ -347,89 +356,43 @@ async def get_zoho_organizations(
         context: dict = Depends(get_authenticated_tenant_context),
     ):
 
-    # 1. Retrieve authenticated tenant context using Dependencies
+    # 1. Retrieve authenticated tenant context using Dependencies.
     pool = context["pool"]
     tenant_id = context["tenant_id"]
-    
 
-    # 2. Retrieve the tenant's active Zoho Authorization
-    zoho_authorization = await get_active_zoho_authorization(
-        pool,
-        tenant_id,
-    )
+    # 2. Delegate organization discovery to the shared service.
+    try:
+        result = await get_zoho_organizations_service(
+            pool,
+            tenant_id,
+        )
 
-    if zoho_authorization is None:
+    except ZohoActiveAuthorizationNotFoundError:
         raise HTTPException(
-            status_code = 404,
-            detail = "No active Zoho authorization found. Connect Zoho first.",
-        )
-    
-
-    # 3. Discover Zoho Organizations
-    organizations = await discover_organizations(
-        pool,
-        tenant_id,
-        zoho_authorization["id"],
-    )
-
-
-    # 4. Handle Zero Organizations
-    if len(organizations) == 0:
-        return {
-            "status": "no_organizations_found",
-            "selection_required": False,
-            "message": "No Zoho organizations were found for this account.",
-        }
-    
-
-    # 5. Handle a Single Organization
-    if len(organizations) == 1:
-        organization = organizations[0]
-
-        connection  = await create_merchant_connection(
-            pool,
-            tenant_id,
-            zoho_authorization["id"],
-            organization["organization_id"],
+            status_code=404,
+            detail="No active Zoho authorization found. Connect Zoho first.",
         )
 
-        # Set the organization connection as the tenant's active organization
-        is_active = await set_active_organization_connection(
-            pool,
-            tenant_id,
-            connection["id"],
+    except ZohoOrganizationDiscoveryError:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to discover Zoho organizations.",
         )
 
-        if not is_active:
-            raise HTTPException(
-                status_code = 500,
-                detail = "Unable to set the active Zoho organization.",
-            )
+    except ZohoOrganizationConnectionCreationError:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the Zoho organization connection.",
+        )
 
-        return {
-            "status": "connected",
-            "selection_required": False,
-            "connection": {
-                "id": str(connection["id"]),
-                "organization_id": connection["zoho_organization_id"],
-                "organization_name": organization.get("name"),
-            },
-        }
+    except ZohoOrganizationActivationError:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to set the active Zoho organization.",
+        )
 
-
-    # 6. Handle Multiple Organizations
-    return {
-        "status": "selection_required",
-        "selection_required": True,
-        "message": "Multiple Zoho organizations were found. Please select one.",
-        "organizations": [
-            {
-                "organization_id":organization["organization_id"],
-                "name": organization.get("name"),
-            }
-            for organization in organizations
-        ],
-    }
+    # 3. Return the service result.
+    return result
 
 
 # Zoho OAuth Organization Selection Endpoint
@@ -439,80 +402,53 @@ async def select_zoho_organization(
         context: dict = Depends(get_authenticated_tenant_context),
     ):
 
-    # 1. Retrieve authenticated tenant context using Dependencies
+    # 1. Retrieve authenticated tenant context using Dependencies.
     pool = context["pool"]
     tenant_id = context["tenant_id"]
-    
 
-    # 2. Retrieve the active Zoho authorization
-    zoho_authorization = await get_active_zoho_authorization(
-        pool,
-        tenant_id,
-    )
-
-    if zoho_authorization is None:
-        raise HTTPException(
-            status_code = 404,
-            detail = "No active Zoho authorization found. Connection Zoho first.",
+    # 2. Delegate organization selection to the shared service.
+    try:
+        result = await select_zoho_organization_service(
+            pool,
+            tenant_id,
+            selection.organization_id,
         )
-    
 
-    # 3. Discover organizations accessible through this authorization
-    organizations = await discover_organizations(
-        pool,
-        tenant_id,
-        zoho_authorization["id"],
-    )
-
-
-    # 4. Verify that the selected organization is accessible
-    selected_organization = next(
-        (
-            organization for organization in organizations 
-            if organization["organization_id"] == selection.organization_id
-        ),
-        None,
-    )
-
-    if selected_organization is None:
+    except ZohoActiveAuthorizationNotFoundError:
         raise HTTPException(
-            status_code = 404,
-            detail = "The selected organization is not accessible through this Zoho authorization.",
+            status_code=404,
+            detail="No active Zoho authorization found. Connect Zoho first.",
         )
-    
 
-    # 5. Create or retrieve the merchant connection
-    connection = await create_merchant_connection(
-        pool,
-        tenant_id,
-        zoho_authorization["id"],
-        selection.organization_id,
-    )
-
-
-    # 6. Set the selected organization as active
-    is_active = await set_active_organization_connection(
-        pool,
-        tenant_id,
-        connection["id"],
-    )
-
-    if not is_active:
+    except ZohoOrganizationDiscoveryError:
         raise HTTPException(
-            status_code = 500,
-            detail = "Unable to set the active Zoho organization.",
+            status_code=500,
+            detail="Unable to discover Zoho organizations.",
         )
-    
 
-    # 7. Return the connected organization
-    return {
-        "status": "connected",
-        "connection": {
-            "id": str(connection["id"]),
-            "organization_id": connection["zoho_organization_id"],
-            "organization_name": selected_organization.get("name"),
-        },
-    }
+    except ZohoOrganizationNotAccessibleError:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "The selected organization is not accessible "
+                "through this Zoho authorization."
+            ),
+        )
+
+    except ZohoOrganizationConnectionCreationError:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create the Zoho organization connection.",
+        )
+
+    except ZohoOrganizationActivationError:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to set the active Zoho organization.",
+        )
+
+    # 3. Return the service result.
+    return result
 
 
 # Exposing Resource Metadata URL in Outer Application using add_route()

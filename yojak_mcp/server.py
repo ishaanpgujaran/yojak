@@ -22,6 +22,13 @@ from app.services.zoho_oauth import (
     ZohoAuthorizationValidationError,
     ZohoOAuthInitiationError,
 )
+from app.services.zoho_organizations import (
+    get_zoho_organizations_service,
+    ZohoActiveAuthorizationNotFoundError,
+    ZohoOrganizationDiscoveryError,
+    ZohoOrganizationConnectionCreationError,
+    ZohoOrganizationActivationError,
+)
 
 # Configure database pool lifecycle
 @asynccontextmanager
@@ -163,6 +170,98 @@ async def yojak_connect_zoho(ctx: Context) -> dict:
         "next_step": (
             "Complete Zoho authorization in the browser. "
             "After the callback confirms success, discover your organizations."
+        ),
+    }
+
+
+# Tool 3 - Discover Zoho Organizations
+@mcp.tool
+async def yojak_discover_zoho_organizations(ctx: Context) -> dict:
+    """
+    Discover the Zoho Inventory organizations accessible to the
+    authenticated user's Zoho account.
+
+    If exactly one organization is found, it is automatically connected.
+    If multiple organizations are found, return them for user selection.
+    """
+
+    # 1. Resolve the authenticated WorkOS user to a Yojak tenant.
+    try:
+        tenant = await get_authenticated_tenant(ctx)
+
+    except DATABASE_AVAILABILITY_ERRORS as error:
+        raise RuntimeError(
+            "Yojak's database is temporarily unavailable. Please try again later."
+        ) from error
+
+    # 2. Retrieve the shared database pool from the MCP lifespan.
+    pool = ctx.lifespan_context.get("pool")
+
+    if pool is None:
+        raise RuntimeError(
+            "Database connection pool is unavailable."
+        )
+
+    # 3. Delegate organization discovery and connection logic
+    #    to the shared service.
+    try:
+        result = await get_zoho_organizations_service(
+            pool,
+            tenant["id"],
+        )
+
+    except DATABASE_AVAILABILITY_ERRORS as error:
+        raise RuntimeError(
+            "Yojak's database is temporarily unavailable. Please try again later."
+        ) from error
+
+    except ZohoActiveAuthorizationNotFoundError as error:
+        raise RuntimeError(
+            "No active Zoho authorization was found. "
+            "Please connect your Zoho account first."
+        ) from error
+
+    except ZohoOrganizationDiscoveryError as error:
+        raise RuntimeError(
+            "Unable to retrieve your Zoho organizations. "
+            "Please try again."
+        ) from error
+
+    except ZohoOrganizationConnectionCreationError as error:
+        raise RuntimeError(
+            "Unable to create the Zoho organization connection."
+        ) from error
+
+    except ZohoOrganizationActivationError as error:
+        raise RuntimeError(
+            "Unable to activate the selected Zoho organization."
+        ) from error
+
+    # 4. Add MCP-specific guidance based on the service result.
+    if result["status"] == "no_organizations_found":
+        return {
+            **result,
+            "next_step": (
+                "Check that your Zoho account has access to at least "
+                "one Zoho Inventory organization."
+            ),
+        }
+
+    if result["status"] == "connected":
+        return {
+            **result,
+            "next_step": (
+                "The Zoho organization is connected and ready to use. "
+                "You can now access its supported Yojak tools."
+            ),
+        }
+
+    return {
+        **result,
+        "next_step": (
+            "Ask the user which organization they want to connect. "
+            "Then call yojak_select_zoho_organization with that "
+            "organization's organization_id."
         ),
     }
 

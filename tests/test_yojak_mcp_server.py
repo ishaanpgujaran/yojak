@@ -459,3 +459,172 @@ async def test_yojak_connect_zoho_translates_service_errors(
         ctx.lifespan_context["pool"],
         tenant["id"],
     )
+
+
+# =========================================================
+# MCP TOOL
+# yojak_discover_zoho_organizations()
+# =========================================================
+
+
+@pytest.mark.anyio
+async def test_yojak_discover_zoho_organizations_connects_single_org(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """A single discovered organization should be automatically connected."""
+
+    mock_discovery_service = AsyncMock(
+        return_value={
+            "status": "connected",
+            "selection_required": False,
+            "connection": {
+                "id": "connection-id",
+                "organization_id": "zoho-org-123",
+                "organization_name": "Test Organization",
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_zoho_organizations_service",
+        mock_discovery_service,
+    )
+
+    result = await mcp_server.yojak_discover_zoho_organizations(ctx)
+
+    assert result["status"] == "connected"
+    assert result["connection"]["organization_name"] == "Test Organization"
+    assert "ready to use" in result["next_step"]
+
+    mock_authenticated_user.assert_awaited_once_with(
+        pool,
+        WORKOS_USER_ID,
+    )
+
+    mock_discovery_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_discover_zoho_organizations_returns_multiple_orgs(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Multiple organizations should be returned for user selection."""
+
+    organizations = [
+        {
+            "organization_id": "zoho-org-123",
+            "name": "Mumbai Organization",
+        },
+        {
+            "organization_id": "zoho-org-456",
+            "name": "Pune Organization",
+        },
+    ]
+
+    mock_discovery_service = AsyncMock(
+        return_value={
+            "status": "selection_required",
+            "selection_required": True,
+            "message": (
+                "Multiple Zoho organizations were found. "
+                "Please select one."
+            ),
+            "organizations": organizations,
+        }
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_zoho_organizations_service",
+        mock_discovery_service,
+    )
+
+    result = await mcp_server.yojak_discover_zoho_organizations(ctx)
+
+    assert result["status"] == "selection_required"
+    assert result["organizations"] == organizations
+    assert "yojak_select_zoho_organization" in result["next_step"]
+
+    mock_discovery_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_discover_zoho_organizations_handles_missing_authorization(
+    ctx,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Discovery should instruct the user to connect Zoho first."""
+
+    mock_discovery_service = AsyncMock(
+        side_effect=mcp_server.ZohoActiveAuthorizationNotFoundError()
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_zoho_organizations_service",
+        mock_discovery_service,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="connect your Zoho account first",
+    ):
+        await mcp_server.yojak_discover_zoho_organizations(ctx)
+
+    mock_discovery_service.assert_awaited_once_with(
+        ctx.lifespan_context["pool"],
+        tenant["id"],
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_discover_zoho_organizations_handles_database_failure(
+    ctx,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Database errors should be translated without exposing internals."""
+
+    mock_discovery_service = AsyncMock(
+        side_effect=asyncpg.PostgresConnectionError(
+            "Sensitive database connection details"
+        )
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_zoho_organizations_service",
+        mock_discovery_service,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="database is temporarily unavailable",
+    ) as error:
+        await mcp_server.yojak_discover_zoho_organizations(ctx)
+
+    assert "Sensitive database connection details" not in str(error.value)
+
+    mock_discovery_service.assert_awaited_once_with(
+        ctx.lifespan_context["pool"],
+        tenant["id"],
+    )
+

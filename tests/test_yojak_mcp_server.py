@@ -628,3 +628,433 @@ async def test_yojak_discover_zoho_organizations_handles_database_failure(
         tenant["id"],
     )
 
+
+
+# =========================================================
+# MCP TOOL
+# yojak_select_zoho_organization()
+# =========================================================
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_activates_selected_org(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """A successfully selected organization should be activated."""
+
+    organization_id = "zoho-org-123"
+
+    mock_selection_service = AsyncMock(
+        return_value={
+            "status": "connected",
+            "connection": {
+                "id": "connection-id",
+                "organization_id": organization_id,
+                "organization_name": "Test Organization",
+            },
+        }
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "connected",
+        "connection": {
+            "id": "connection-id",
+            "organization_id": organization_id,
+            "organization_name": "Test Organization",
+        },
+        "next_step": (
+            "You can now use Yojak's Zoho Inventory tools "
+            "for this organization."
+        ),
+    }
+
+    mock_authenticated_user.assert_awaited_once_with(
+        pool,
+        WORKOS_USER_ID,
+    )
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_missing_authorization(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Selection should require an active Zoho authorization."""
+
+    organization_id = "zoho-org-123"
+
+    mock_selection_service = AsyncMock(
+        side_effect=mcp_server.ZohoActiveAuthorizationNotFoundError()
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "zoho_authorization_required",
+        "message": (
+            "Connect your Zoho Inventory account before "
+            "selecting an organization."
+        ),
+        "next_step": "Call yojak_connect_zoho.",
+    }
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_rejects_inaccessible_org(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """An inaccessible organization must not be activated."""
+
+    organization_id = "inaccessible-org-999"
+
+    mock_selection_service = AsyncMock(
+        side_effect=mcp_server.ZohoOrganizationNotAccessibleError()
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "organization_not_accessible",
+        "message": (
+            "The selected organization is not accessible "
+            "through your Zoho account."
+        ),
+        "next_step": (
+            "Call yojak_discover_zoho_organizations to "
+            "retrieve accessible organizations."
+        ),
+    }
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_discovery_failure(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Discovery failures should return a safe structured error."""
+
+    organization_id = "zoho-org-123"
+
+    mock_selection_service = AsyncMock(
+        side_effect=mcp_server.ZohoOrganizationDiscoveryError()
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "organization_discovery_failed",
+        "message": (
+            "Yojak could not verify your Zoho organizations. "
+            "Please try again later."
+        ),
+    }
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_connection_creation_failure(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Connection creation failures should return a safe error."""
+
+    organization_id = "zoho-org-123"
+
+    mock_selection_service = AsyncMock(
+        side_effect=mcp_server.ZohoOrganizationConnectionCreationError()
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "organization_connection_failed",
+        "message": (
+            "Yojak could not create the organization connection."
+        ),
+    }
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_activation_failure(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Activation failures should return a safe structured error."""
+
+    organization_id = "zoho-org-123"
+
+    mock_selection_service = AsyncMock(
+        side_effect=mcp_server.ZohoOrganizationActivationError()
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "organization_activation_failed",
+        "message": (
+            "Yojak could not activate the selected "
+            "organization connection."
+        ),
+    }
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_database_failure(
+    ctx,
+    pool,
+    tenant,
+    mock_authenticated_user,
+    monkeypatch,
+):
+    """Database failures should not expose internal connection details."""
+
+    organization_id = "zoho-org-123"
+
+    mock_selection_service = AsyncMock(
+        side_effect=asyncpg.PostgresConnectionError(
+            "Sensitive database connection details"
+        )
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        organization_id,
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "database_unavailable",
+        "message": (
+            "Yojak is temporarily unable to access its database. "
+            "Please try again later."
+        ),
+    }
+
+    assert "Sensitive database connection details" not in str(result)
+
+    mock_selection_service.assert_awaited_once_with(
+        pool,
+        tenant["id"],
+        organization_id,
+    )
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_database_failure_during_tenant_resolution(
+    ctx,
+    monkeypatch,
+):
+    """Database errors during tenant resolution should return a safe error."""
+
+    mock_get_or_create_tenant = AsyncMock(
+        side_effect=asyncpg.PostgresConnectionError(
+            "Sensitive database connection details"
+        )
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_access_token",
+        lambda: SimpleNamespace(subject=WORKOS_USER_ID),
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_or_create_tenant",
+        mock_get_or_create_tenant,
+    )
+
+    mock_selection_service = AsyncMock()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        "zoho-org-123",
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "database_unavailable",
+        "message": (
+            "Yojak is temporarily unable to access its database. "
+            "Please try again later."
+        ),
+    }
+
+    assert "Sensitive database connection details" not in str(result)
+
+    mock_selection_service.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_yojak_select_zoho_organization_handles_missing_database_pool(
+    tenant,
+    monkeypatch,
+):
+    """A missing database pool should return a safe error."""
+
+    ctx = SimpleNamespace(
+        lifespan_context={}
+    )
+
+    mock_get_authenticated_tenant = AsyncMock(
+        return_value=tenant
+    )
+
+    monkeypatch.setattr(
+        mcp_server,
+        "get_authenticated_tenant",
+        mock_get_authenticated_tenant,
+    )
+
+    mock_selection_service = AsyncMock()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "select_zoho_organization_service",
+        mock_selection_service,
+    )
+
+    result = await mcp_server.yojak_select_zoho_organization(
+        ctx,
+        "zoho-org-123",
+    )
+
+    assert result == {
+        "status": "error",
+        "error": "database_unavailable",
+        "message": "Yojak's database connection is not available.",
+    }
+
+    mock_get_authenticated_tenant.assert_awaited_once_with(ctx)
+    mock_selection_service.assert_not_awaited()
+
+
+

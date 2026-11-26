@@ -24,10 +24,12 @@ from app.services.zoho_oauth import (
 )
 from app.services.zoho_organizations import (
     get_zoho_organizations_service,
+    select_zoho_organization_service,
     ZohoActiveAuthorizationNotFoundError,
     ZohoOrganizationDiscoveryError,
     ZohoOrganizationConnectionCreationError,
     ZohoOrganizationActivationError,
+    ZohoOrganizationNotAccessibleError,
 )
 
 # Configure database pool lifecycle
@@ -263,5 +265,87 @@ async def yojak_discover_zoho_organizations(ctx: Context) -> dict:
             "Then call yojak_select_zoho_organization with that "
             "organization's organization_id."
         ),
+    }
+
+
+@mcp.tool
+async def yojak_select_zoho_organization(
+    ctx: Context,
+    organization_id: str,
+) -> dict:
+    """Select and activate an accessible Zoho Inventory organization."""
+
+    try:
+        tenant = await get_authenticated_tenant(ctx)
+    except DATABASE_AVAILABILITY_ERRORS:
+        return {
+            "status": "error",
+            "error": "database_unavailable",
+            "message": "Yojak is temporarily unable to access its database. Please try again later.",
+        }
+
+    pool = ctx.lifespan_context.get("pool")
+
+    if pool is None:
+        return {
+            "status": "error",
+            "error": "database_unavailable",
+            "message": "Yojak's database connection is not available.",
+        }
+
+    try:
+        result = await select_zoho_organization_service(
+            pool,
+            tenant["id"],
+            organization_id,
+        )
+
+    except DATABASE_AVAILABILITY_ERRORS:
+        return {
+            "status": "error",
+            "error": "database_unavailable",
+            "message": "Yojak is temporarily unable to access its database. Please try again later.",
+        }
+
+    except ZohoActiveAuthorizationNotFoundError:
+        return {
+            "status": "error",
+            "error": "zoho_authorization_required",
+            "message": "Connect your Zoho Inventory account before selecting an organization.",
+            "next_step": "Call yojak_connect_zoho.",
+        }
+
+    except ZohoOrganizationNotAccessibleError:
+        return {
+            "status": "error",
+            "error": "organization_not_accessible",
+            "message": "The selected organization is not accessible through your Zoho account.",
+            "next_step": "Call yojak_discover_zoho_organizations to retrieve accessible organizations.",
+        }
+
+    except ZohoOrganizationDiscoveryError:
+        return {
+            "status": "error",
+            "error": "organization_discovery_failed",
+            "message": "Yojak could not verify your Zoho organizations. Please try again later.",
+        }
+
+    except ZohoOrganizationConnectionCreationError:
+        return {
+            "status": "error",
+            "error": "organization_connection_failed",
+            "message": "Yojak could not create the organization connection.",
+        }
+
+    except ZohoOrganizationActivationError:
+        return {
+            "status": "error",
+            "error": "organization_activation_failed",
+            "message": "Yojak could not activate the selected organization connection.",
+        }
+
+    return {
+        **result,
+        "next_step": "You can now use Yojak's Zoho Inventory tools for this organization.",
     }
 
